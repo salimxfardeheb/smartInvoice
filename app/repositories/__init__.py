@@ -11,6 +11,7 @@ from app.repositories.base import BaseRepository
 from app.repositories.invoice_line_repository import InvoiceLineRepository
 from app.repositories.invoice_repository import InvoiceRepository
 from app.repositories.purchase_order_repository import PurchaseOrderRepository
+from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.user_repository import UserRepository
 
@@ -20,6 +21,7 @@ __all__ = [
     "InvoiceLineRepository",
     "InvoiceRepository",
     "PurchaseOrderRepository",
+    "RefreshTokenRepository",
     "SupplierRepository",
     "UserRepository",
 ]

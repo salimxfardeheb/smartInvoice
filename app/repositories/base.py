@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Generic, TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
@@ -47,6 +47,11 @@ class BaseRepository(Generic[ModelT]):
             select(self.model).order_by(self.model.id).limit(limit).offset(offset)
         )
         return list(self.session.scalars(stmt))
+
+    def count(self) -> int:
+        """Retourne le nombre total d'entités."""
+        stmt = select(func.count(self.model.id))
+        return int(self.session.scalar(stmt) or 0)
 
     def update(self, instance: ModelT, **fields: Any) -> ModelT:
         """Met à jour les attributs fournis sur l'entité en session."""

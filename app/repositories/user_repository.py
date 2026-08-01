@@ -50,3 +50,16 @@ class UserRepository(BaseRepository[User]):
         """Retourne les utilisateurs actifs."""
         stmt = select(User).where(User.is_active.is_(True)).order_by(User.id)
         return list(self.session.scalars(stmt))
+
+    def filter(
+        self,
+        *,
+        active: bool | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[User]:
+        """Liste paginée des utilisateurs, avec filtre optionnel par état."""
+        stmt = select(User).order_by(User.id).limit(limit).offset(offset)
+        if active is not None:
+            stmt = stmt.where(User.is_active.is_(active))
+        return list(self.session.scalars(stmt))

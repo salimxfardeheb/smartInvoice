@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401
 from app.db.base import Base
 
-HEAD = "0001_initial_schema"
+HEAD = "0002_add_refresh_tokens"
 
 EXPECTED_TABLES = {
     "users",
@@ -21,6 +21,7 @@ EXPECTED_TABLES = {
     "invoices",
     "invoice_lines",
     "anomalies",
+    "refresh_tokens",
 }
 
 

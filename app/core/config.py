@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +19,11 @@ class Settings(BaseSettings):
     Attributs:
         database_url: URL de connexion SQLAlchemy (par défaut PostgreSQL local).
         echo_sql: active les logs SQL (utile en développement).
+        jwt_secret_key: clé secrète de signature des jetons JWT.
+        jwt_algorithm: algorithme de signature JWT.
+        access_token_expire_minutes: durée de vie des access tokens.
+        refresh_token_expire_days: durée de vie des refresh tokens.
+        environment: environnement d'exécution (development/production).
     """
 
     model_config = SettingsConfigDict(
@@ -30,6 +36,24 @@ class Settings(BaseSettings):
         "postgresql+psycopg2://smartinvoice:smartinvoice@localhost:5432/smartinvoice"
     )
     echo_sql: bool = False
+
+    environment: str = "development"
+    jwt_secret_key: str = "dev-only-change-me-0123456789abcdef"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+
+    @model_validator(mode="after")
+    def _reject_default_secret_in_production(self) -> Settings:
+        """Refuse la clé JWT par défaut en production."""
+        if (
+            self.environment == "production"
+            and self.jwt_secret_key == "dev-only-change-me-0123456789abcdef"
+        ):
+            raise ValueError(
+                "jwt_secret_key ne doit pas être la valeur par défaut en production."
+            )
+        return self
 
 
 @lru_cache

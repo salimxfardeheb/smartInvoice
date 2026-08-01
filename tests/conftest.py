@@ -35,7 +35,11 @@ def _enable_foreign_keys(dbapi_connection, _record) -> None:  # pragma: no cover
 @pytest.fixture()
 def engine() -> Iterator[Engine]:
     """Moteur SQLite en mémoire avec schéma créé depuis les modèles."""
-    eng = create_engine("sqlite://", poolclass=StaticPool)
+    eng = create_engine(
+        "sqlite://",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
     event.listen(eng, "connect", _enable_foreign_keys)
     Base.metadata.create_all(eng)
     yield eng
@@ -63,7 +67,11 @@ def alembic_config() -> Config:
 @pytest.fixture()
 def migrated_engine(alembic_config: Config) -> Iterator[Engine]:
     """Moteur SQLite en mémoire dont le schéma est produit par ``upgrade head``."""
-    eng = create_engine("sqlite://", poolclass=StaticPool)
+    eng = create_engine(
+        "sqlite://",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
     event.listen(eng, "connect", _enable_foreign_keys)
     connection = eng.connect()
     alembic_config.attributes["connection"] = connection
@@ -71,6 +79,75 @@ def migrated_engine(alembic_config: Config) -> Iterator[Engine]:
     yield eng
     connection.close()
     eng.dispose()
+
+
+@pytest.fixture()
+def client(engine: Engine):
+    """Client HTTP de test branché sur le moteur SQLite en mémoire.
+
+    La dépendance ``get_db`` de l'application est remplacée pour servir des
+    sessions sur le moteur de test, avec commit à la fin de chaque requête
+    (même comportement que la production).
+    """
+    from fastapi.testclient import TestClient
+
+    from app.api.deps import get_db
+    from app.main import create_app
+
+    app = create_app()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def override_get_db() -> Iterator[Session]:
+        db = session_factory()
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+# --- Helpers d'authentification --------------------------------------------
+
+
+def register_user(
+    client,
+    *,
+    username: str,
+    password: str = "Password123!",
+    email: str | None = None,
+    role: str | None = None,
+):
+    """Inscrit un utilisateur via l'API et retourne la réponse HTTP."""
+    payload = {
+        "username": username,
+        "email": email or f"{username}@example.com",
+        "password": password,
+    }
+    if role is not None:
+        payload["role"] = role
+    return client.post("/api/auth/register", json=payload)
+
+
+def login(client, username: str, password: str = "Password123!"):
+    """Se connecte via l'API (formulaire OAuth2) et retourne la réponse HTTP."""
+    return client.post(
+        "/api/auth/login", data={"username": username, "password": password}
+    )
+
+
+def auth_headers(client, username: str, password: str = "Password123!") -> dict[str, str]:
+    """Retourne l'en-tête Authorization d'un utilisateur connecté."""
+    response = login(client, username, password)
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
 def make_supplier(session: Session, *, odoo_id: int = 1, name: str = "ACME SAS") -> object:

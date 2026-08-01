@@ -7,12 +7,17 @@ activation).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import Boolean, CheckConstraint, Enum, String, true
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.enums import UserRole, enum_values
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:  # pragma: no cover - évite les imports circulaires à runtime
+    from app.models.refresh_token import RefreshToken
 
 
 class User(Base, TimestampMixin):
@@ -45,6 +50,10 @@ class User(Base, TimestampMixin):
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=true()
+    )
+
+    refresh_tokens: Mapped[list[RefreshToken]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
 
     def __repr__(self) -> str:  # pragma: no cover - aide au debug
