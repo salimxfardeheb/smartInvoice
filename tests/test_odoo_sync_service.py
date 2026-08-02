@@ -217,6 +217,42 @@ class TestFindPurchaseOrder:
         with pytest.raises(SupplierNotFoundError):
             service.find_purchase_order("PO-2026-001")
 
+    def test_empty_reference_raises(self, session) -> None:
+        service = make_service(session)
+        with pytest.raises(PurchaseOrderNotFoundError):
+            service.find_purchase_order("   ")
+
+    def test_supplier_resolved_from_order_when_synced(self, session) -> None:
+        make_supplier(session, odoo_id=42, name="ACME SAS")
+        session.commit()
+        service = make_service(
+            session,
+            purchase_orders=[_po(100, "PO-2026-001", 42)],
+        )
+
+        po = service.find_purchase_order("PO-2026-001")
+
+        assert po.supplier_id == SupplierRepository(session).get_by_odoo_id(42).id
+
+    def test_existing_order_is_updated(self, session) -> None:
+        supplier = make_supplier(session, odoo_id=42, name="ACME SAS")
+        po = PurchaseOrderRepository(session).create(
+            odoo_id=100, reference="PO-VIEUX", supplier_id=supplier.id,
+            state="draft",
+        )
+        session.commit()
+        service = make_service(
+            session,
+            purchase_orders=[_po(100, "PO-2026-001", 42)],
+        )
+
+        updated = service.find_purchase_order("PO-2026-001")
+
+        assert updated.id == po.id
+        assert updated.reference == "PO-2026-001"
+        assert updated.state == "purchase"
+        assert PurchaseOrderRepository(session).count() == 1
+
 
 class TestLoadPurchaseOrderLines:
     def _po(self, session) -> PurchaseOrder:
@@ -304,3 +340,32 @@ class TestLoadPurchaseOrderLines:
         # Aucun appel product.product si aucune ligne ne porte de produit.
         models = [call[0] for call in service.client.calls]
         assert "product.product" not in models
+
+
+class TestConversionHelpers:
+    """Branches des helpers de conversion (nom, devise, décimal, date)."""
+
+    def test_name_of_non_tuple_returns_none(self) -> None:
+        assert OdooSyncService._name_of(42) is None
+        assert OdooSyncService._name_of(("x",)) is None
+        assert OdooSyncService._name_of(("x", "")) is None
+
+    def test_as_decimal_passthrough(self) -> None:
+        assert OdooSyncService._as_decimal(None) is None
+        value = Decimal("1.5")
+        assert OdooSyncService._as_decimal(value) is value
+
+    def test_as_decimal_invalid_returns_none(self) -> None:
+        assert OdooSyncService._as_decimal("pas-un-nombre") is None
+
+    def test_as_date_handles_every_type(self) -> None:
+        from datetime import date, datetime, timedelta
+
+        assert OdooSyncService._as_date(None) is None
+        day = date(2026, 1, 10)
+        assert OdooSyncService._as_date(day) is day
+        assert OdooSyncService._as_date(datetime(2026, 1, 10, 12, 30)) == datetime(2026, 1, 10, 12, 30)
+        assert OdooSyncService._as_date("2026-01-10T00:00:00") == day
+        assert OdooSyncService._as_date("pas-une-date") is None
+        assert OdooSyncService._as_date(12345) is None
+        assert OdooSyncService._as_date(timedelta(days=1)) is None

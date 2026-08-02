@@ -2,23 +2,50 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.models.enums import AnomalyCategory, InvoiceStatus
+from app.models.enums import (
+    AnomalyCategory,
+    AuditAction,
+    InvoiceStatus,
+    UserRole,
+)
+from app.models.refresh_token import RefreshToken
 from app.repositories import (
     AnomalyRepository,
+    AuditLogRepository,
     InvoiceLineRepository,
     InvoiceRepository,
     PurchaseOrderLineRepository,
     PurchaseOrderRepository,
+    RefreshTokenRepository,
     SupplierRepository,
     UserRepository,
 )
 
 from tests.conftest import make_invoice, make_supplier
+
+
+class TestBaseRepository:
+    def test_list_paginated(self, session) -> None:
+        repo = UserRepository(session)
+        for i in range(5):
+            repo.create(username=f"u{i}", email=f"u{i}@x.io", hashed_password="x")
+        session.commit()
+
+        assert len(repo.list(limit=2, offset=0)) == 2
+        assert len(repo.list(limit=2, offset=2)) == 2
+        assert len(repo.list(limit=2, offset=4)) == 1
+
+    def test_count(self, session) -> None:
+        repo = UserRepository(session)
+        assert repo.count() == 0
+        repo.create(username="a", email="a@x.io", hashed_password="x")
+        session.commit()
+        assert repo.count() == 1
 
 
 class TestUserRepository:
@@ -58,6 +85,19 @@ class TestUserRepository:
         )
         session.commit()
         assert {u.username for u in repo.list_active()} == {"a"}
+
+    def test_filter_by_active(self, session) -> None:
+        repo = UserRepository(session)
+        repo.create(username="a", email="a@x.io", hashed_password="x")
+        repo.create(
+            username="b", email="b@x.io", hashed_password="x", is_active=False
+        )
+        session.commit()
+
+        assert {u.username for u in repo.filter(active=True)} == {"a"}
+        assert {u.username for u in repo.filter(active=False)} == {"b"}
+        assert len(repo.filter()) == 2
+        assert len(repo.filter(limit=1)) == 1
 
 
 class TestSupplierRepository:
@@ -212,6 +252,11 @@ class TestInvoiceRepository:
         assert [i.invoice_number for i in result] == ["Jan"]
         assert repo.list_by_date_range(date(2026, 3, 1), date(2026, 3, 31)) == []
 
+        assert repo.count(
+            issue_date_from=date(2026, 1, 1), issue_date_to=date(2026, 1, 31)
+        ) == 1
+        assert repo.count(issue_date_from=date(2026, 3, 1)) == 0
+
     def test_filter_combined(self, session) -> None:
         supplier = make_supplier(session)
         repo = InvoiceRepository(session)
@@ -249,6 +294,36 @@ class TestInvoiceRepository:
         assert len(page) == 2
         assert repo.count() == 5
 
+    def test_filter_by_created_at(self, session) -> None:
+        supplier = make_supplier(session)
+        repo = InvoiceRepository(session)
+        repo.create(invoice_number="F-1", supplier_id=supplier.id)
+        repo.create(invoice_number="F-2", supplier_id=supplier.id)
+        session.commit()
+
+        past = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        later = datetime(2099, 1, 1, tzinfo=timezone.utc)
+        assert len(repo.filter(created_from=past)) >= 2
+        assert len(repo.filter(created_to=later)) >= 2
+        assert len(repo.filter(created_from=later)) == 0
+        assert repo.count(created_from=past) >= 2
+        assert repo.count(created_to=later) >= 2
+        assert repo.count(created_from=later) == 0
+
+    def test_find_other_with_supplier_number(self, session) -> None:
+        supplier = make_supplier(session)
+        repo = InvoiceRepository(session)
+        first = repo.create(invoice_number="FAC-001", supplier_id=supplier.id)
+        second = repo.create(invoice_number="FAC-002", supplier_id=supplier.id)
+        session.commit()
+
+        assert repo.find_other_with_supplier_number(
+            first.id, supplier.id, "FAC-001"
+        ) is None
+        assert repo.find_other_with_supplier_number(
+            second.id, supplier.id, "FAC-001"
+        ) is first
+
 
 class TestInvoiceLineRepository:
     def test_create_and_list_ordered(self, session) -> None:
@@ -285,3 +360,105 @@ class TestAnomalyRepository:
         assert anomaly.resolved is True
         assert anomaly.resolved_at is not None
         assert repo.list_unresolved() == []
+
+
+class TestAuditLogRepository:
+    def test_create_list_and_recent(self, session) -> None:
+        supplier = make_supplier(session)
+        invoice = make_invoice(session, supplier.id)
+        repo = AuditLogRepository(session)
+        repo.create(
+            invoice_id=invoice.id,
+            user_id=None,
+            action=AuditAction.CORRECTED,
+            message="Facture créée",
+        )
+        repo.create(
+            invoice_id=invoice.id,
+            user_id=None,
+            action=AuditAction.VALIDATED,
+            message="Validée",
+            details={"champ": "valeur"},
+        )
+        session.commit()
+
+        entries = repo.list_by_invoice(invoice.id)
+        assert [e.action for e in entries] == [
+            AuditAction.VALIDATED,
+            AuditAction.CORRECTED,
+        ]
+        assert entries[0].details == {"champ": "valeur"}
+
+        recent = repo.list_recent(limit=1)
+        assert len(recent) == 1
+        assert recent[0].action in {
+            AuditAction.VALIDATED,
+            AuditAction.CORRECTED,
+        }
+
+        all_recent = repo.list_recent()
+        assert len(all_recent) == 2
+        assert {e.action for e in all_recent} == {
+            AuditAction.VALIDATED,
+            AuditAction.CORRECTED,
+        }
+
+
+class TestRefreshTokenRepository:
+    def _token(self, repo, user_id: int, *, token_hash="h1", jti="j1"):
+        return repo.create(
+            user_id=user_id,
+            token_hash=token_hash,
+            jti=jti,
+            expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+        )
+
+    def test_create_and_lookups(self, session) -> None:
+        user = UserRepository(session).create(
+            username="salim", email="salim@x.io", hashed_password="hashed"
+        )
+        session.commit()
+        repo = RefreshTokenRepository(session)
+        token = self._token(repo, user.id)
+        session.commit()
+
+        assert repo.get(token.id) is token
+        assert isinstance(token, RefreshToken)
+        assert repo.get_by_token_hash("h1") is token
+        assert repo.get_by_jti("j1") is token
+        assert repo.get_by_token_hash("inconnu") is None
+        assert repo.get_by_jti("inconnu") is None
+
+    def test_revoke_and_list_active(self, session) -> None:
+        user = UserRepository(session).create(
+            username="salim", email="salim@x.io", hashed_password="hashed"
+        )
+        session.commit()
+        repo = RefreshTokenRepository(session)
+        first = self._token(repo, user.id, token_hash="h1", jti="j1")
+        self._token(repo, user.id, token_hash="h2", jti="j2")
+        session.commit()
+
+        assert len(repo.list_active_for_user(user.id)) == 2
+
+        repo.revoke(first)
+        session.commit()
+        assert first.revoked_at is not None
+        assert len(repo.list_active_for_user(user.id)) == 1
+
+    def test_revoke_all_for_user(self, session) -> None:
+        user = UserRepository(session).create(
+            username="salim", email="salim@x.io", hashed_password="hashed"
+        )
+        session.commit()
+        repo = RefreshTokenRepository(session)
+        self._token(repo, user.id, token_hash="h1", jti="j1")
+        self._token(repo, user.id, token_hash="h2", jti="j2")
+        session.commit()
+
+        revoked = repo.revoke_all_for_user(user.id)
+        session.commit()
+
+        assert revoked == 2
+        assert repo.list_active_for_user(user.id) == []
+        assert repo.revoke_all_for_user(user.id) == 0

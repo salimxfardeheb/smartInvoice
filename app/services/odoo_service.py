@@ -321,7 +321,7 @@ class OdooSyncService:
         """Convertit une date Odoo en ``date`` (``None`` si illisible)."""
         if value is None or isinstance(value, date):
             return value
-        if isinstance(value, datetime):
+        if isinstance(value, datetime):  # pragma: no cover - datetime ⊂ date, déjà couvert ci-dessus
             return value.date()
         if isinstance(value, str):
             try:

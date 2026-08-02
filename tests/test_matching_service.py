@@ -418,3 +418,275 @@ class TestMatchingApi:
         assert "quantite" in categories
         assert "montant" in categories
         assert body["score"] < 1.0
+
+
+class TestFuzzySupplierName:
+    """Fournisseur extrait proche (mais non identique) → correspondance floue."""
+
+    def test_similar_supplier_name_is_accepted(self, session) -> None:
+        _, _, invoice = _build_context(
+            session, supplier_name="ACME CORP", extracted_supplier_name="ACME CORPA"
+        )
+        result = MatchingService(session).match(invoice)
+
+        assert result.supplier_match is True
+        assert [a.category for a in result.anomalies] == []
+        assert result.score == 1.0
+
+
+class TestPoBelongsToAnotherSupplier:
+    """Le BC trouvé appartient à un autre fournisseur que la facture."""
+
+    def test_lines_are_unpaired_and_anomaly_recorded(self, session) -> None:
+        supplier_a = make_supplier(session, odoo_id=42, name="ACME SAS")
+        supplier_b = make_supplier(session, odoo_id=43, name="Betasoft Inc")
+
+        po = PurchaseOrderRepository(session).create(
+            odoo_id=100,
+            reference="PO-2026-001",
+            supplier_id=supplier_a.id,
+            state="purchase",
+            total_amount="461.25",
+        )
+        PurchaseOrderLineRepository(session).create(
+            purchase_order_id=po.id,
+            odoo_id=1,
+            line_number=10,
+            product_ref="CBL-001",
+            name="Câble HDMI",
+            quantity="10.0",
+            unit_price="8.50",
+            amount="85.00",
+        )
+        invoice = InvoiceRepository(session).create(
+            invoice_number="FAC-2026-001",
+            supplier_id=supplier_b.id,
+            extracted_data={
+                "general": {
+                    "supplier_name": "Betasoft Inc",
+                    "invoice_number": "FAC-2026-001",
+                    "purchase_order_reference": "PO-2026-001",
+                }
+            },
+        )
+        InvoiceLineRepository(session).create(
+            invoice_id=invoice.id,
+            line_number=1,
+            description="Câble HDMI",
+            product_ref="CBL-001",
+            quantity="10.0",
+            unit_price="8.50",
+            amount="85.00",
+        )
+        session.commit()
+
+        result = MatchingService(session).match(invoice)
+
+        assert result.purchase_order is not None
+        assert result.purchase_order.id == po.id
+        po_anomalies = [
+            a
+            for a in result.anomalies
+            if a.category is AnomalyCategory.PURCHASE_ORDER
+        ]
+        assert len(po_anomalies) == 1
+        assert "autre fournisseur" in po_anomalies[0].message
+        assert result.matched_line_count == 0
+        assert result.line_matches[0].matched is False
+        assert result.score == pytest.approx(0.1)
+
+
+class TestFallbackViaLinkedPo:
+    """Sans référence extraite, le BC est retrouvé via le lien de la facture."""
+
+    def test_missing_reference_uses_linked_purchase_order(self, session) -> None:
+        _, po, invoice = _build_context(session)
+        general = dict(invoice.extracted_data["general"])
+        general.pop("purchase_order_reference", None)
+        invoice.extracted_data = {"general": general, "financial": {}, "lines": []}
+        invoice.purchase_order_id = po.id
+        session.commit()
+
+        result = MatchingService(session).match(invoice)
+
+        assert result.purchase_order is not None
+        assert result.purchase_order.id == po.id
+        assert result.matched_line_count == 2
+        assert result.score == 1.0
+
+
+class TestFuzzyLineMatching:
+    """Branches de la correspondance approximative sur les descriptions."""
+
+    def test_empty_description_target_returns_none(self, session) -> None:
+        _, _, invoice = _build_context(
+            session,
+            invoice_lines=[
+                {
+                    "line_number": 1, "description": "",
+                    "quantity": "10.0", "unit_price": "8.50", "amount": "85.00",
+                },
+            ],
+            totals=None,
+        )
+        result = MatchingService(session).match(invoice)
+
+        assert result.matched_line_count == 0
+        assert any(
+            a.category is AnomalyCategory.PRODUCT_MISSING for a in result.anomalies
+        )
+
+    def test_similar_name_matches_fuzzy(self, session) -> None:
+        _, _, invoice = _build_context(
+            session,
+            invoice_lines=[
+                {
+                    "line_number": 1, "description": "Câble HDMI.",
+                    "quantity": "10.0", "unit_price": "8.50", "amount": "85.00",
+                },
+            ],
+            totals=None,
+        )
+        result = MatchingService(session).match(invoice)
+
+        assert result.matched_line_count == 1
+        assert result.line_matches[0].purchase_order_line.odoo_id == 1
+        assert result.line_matches[0].matched is True
+
+    def test_empty_name_candidate_is_skipped(self, session) -> None:
+        _, _, invoice = _build_context(
+            session,
+            po_lines=[
+                {
+                    "odoo_id": 1, "line_number": 10, "product_ref": "X-1",
+                    "name": "   ", "quantity": "1.0",
+                    "unit_price": "1.00", "amount": "1.00",
+                },
+            ],
+            invoice_lines=[
+                {
+                    "line_number": 1, "description": "Produit mystère",
+                    "quantity": "1.0", "unit_price": "1.00", "amount": "1.00",
+                },
+            ],
+            totals=None,
+        )
+        result = MatchingService(session).match(invoice)
+
+        assert result.matched_line_count == 0
+        assert any(
+            a.category is AnomalyCategory.PRODUCT_MISSING for a in result.anomalies
+        )
+
+    def test_exact_name_match_without_ref(self, session) -> None:
+        _, _, invoice = _build_context(
+            session,
+            invoice_lines=[
+                {
+                    "line_number": 1, "description": "Écran LED",
+                    "quantity": "2.0", "unit_price": "150.00", "amount": "300.00",
+                },
+            ],
+            totals=None,
+        )
+        result = MatchingService(session).match(invoice)
+
+        assert result.matched_line_count == 1
+        assert result.line_matches[0].purchase_order_line.odoo_id == 2
+        assert result.line_matches[0].matched is True
+
+
+class TestNoExtractedSupplierName:
+    """Aucun nom de fournisseur extrait → vérification neutre."""
+
+    def test_missing_supplier_name_is_neutral(self, session) -> None:
+        _, _, invoice = _build_context(
+            session, extracted_supplier_name=""
+        )
+        result = MatchingService(session).match(invoice)
+
+        assert result.supplier_match is True
+        assert result.score == 1.0
+        assert [a.category for a in result.anomalies] == []
+
+
+class TestTaxEdgeCases:
+    """Branches TVA : BC sans total, cohérence interne de la facture."""
+
+    def test_po_without_total_skips_tax_deduction(self, session) -> None:
+        _, _, invoice = _build_context(session, po_total=None)
+        result = MatchingService(session).match(invoice)
+
+        assert result.score == 1.0
+        assert [a.category for a in result.anomalies] == []
+
+    def test_internally_inconsistent_tax_adds_anomaly(self, session) -> None:
+        _, _, invoice = _build_context(session, totals=("385.00", "50.00", "461.25"))
+        result = MatchingService(session).match(invoice)
+
+        assert any(a.category is AnomalyCategory.TAX for a in result.anomalies)
+        assert result.score < 1.0
+
+
+class TestNoMatchedLines:
+    """Aucune ligne rapprochée → composantes quantité/prix nulles."""
+
+    def test_all_lines_unmatched_zeroes_quantity_and_price(self, session) -> None:
+        _, _, invoice = _build_context(
+            session,
+            invoice_lines=[
+                {
+                    "line_number": 1, "description": "Produit totalement inconnu",
+                    "product_ref": "ZZZ-999", "quantity": "1.0",
+                    "unit_price": "1.00", "amount": "1.00",
+                },
+            ],
+            totals=None,
+        )
+        result = MatchingService(session).match(invoice)
+
+        assert result.matched_line_count == 0
+        assert result.score == pytest.approx(0.45)
+
+
+class TestRelativeDeltaEdgeCases:
+    """Cas limites de ``_relative_delta`` (opérandes absents/invalides/nuls)."""
+
+    def test_none_operand_returns_none(self, session) -> None:
+        _, _, invoice = _build_context(
+            session,
+            invoice_lines=[
+                {
+                    "line_number": 1, "description": "Câble HDMI",
+                    "product_ref": "CBL-001", "unit_price": "8.50",
+                    "amount": "85.00",
+                },
+            ],
+            totals=None,
+        )
+        result = MatchingService(session).match(invoice)
+
+        assert result.matched_line_count == 1
+        assert result.line_matches[0].quantity_delta is None
+        assert result.line_matches[0].quantity_matched is True
+
+    def test_zero_denominator_returns_zero(self) -> None:
+        assert (
+            MatchingService._relative_delta(Decimal("0"), Decimal("0")) == 0.0
+        )
+
+    def test_invalid_operand_returns_none(self) -> None:
+        assert MatchingService._relative_delta(Decimal("1"), "abc") is None
+
+
+class TestFormatHelpers:
+    """Formatage des messages d'anomalie (valeurs absentes ou invalides)."""
+
+    def test_fmt_none_returns_dash(self) -> None:
+        assert MatchingService._fmt(None) == "—"
+
+    def test_fmt_invalid_value_returns_string(self) -> None:
+        assert MatchingService._fmt("not-a-number") == "not-a-number"
+
+    def test_fmt_delta_none_returns_dash(self) -> None:
+        assert MatchingService._fmt_delta(None) == "—"
