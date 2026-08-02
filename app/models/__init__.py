@@ -8,6 +8,7 @@ from app.models.anomaly import Anomaly
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
 from app.models.purchase_order import PurchaseOrder
+from app.models.purchase_order_line import PurchaseOrderLine
 from app.models.refresh_token import RefreshToken
 from app.models.supplier import Supplier
 from app.models.user import User
@@ -17,6 +18,7 @@ __all__ = [
     "Invoice",
     "InvoiceLine",
     "PurchaseOrder",
+    "PurchaseOrderLine",
     "RefreshToken",
     "Supplier",
     "User",

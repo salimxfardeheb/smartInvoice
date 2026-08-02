@@ -18,6 +18,7 @@ from app.models.enums import (
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
 from app.models.purchase_order import PurchaseOrder
+from app.models.purchase_order_line import PurchaseOrderLine
 from app.models.supplier import Supplier
 from app.models.user import User
 
@@ -28,6 +29,7 @@ EXPECTED_TABLES = {
     "users",
     "suppliers",
     "purchase_orders",
+    "purchase_order_lines",
     "invoices",
     "invoice_lines",
     "anomalies",
@@ -46,6 +48,7 @@ class TestSchema:
         assert InvoiceLine.__table__.foreign_keys.__len__() == 1
         assert Anomaly.__table__.foreign_keys.__len__() == 1
         assert PurchaseOrder.__table__.foreign_keys.__len__() == 1
+        assert PurchaseOrderLine.__table__.foreign_keys.__len__() == 1
 
 
 class TestInvoiceStatus:

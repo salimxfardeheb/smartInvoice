@@ -12,6 +12,7 @@ from app.repositories import (
     AnomalyRepository,
     InvoiceLineRepository,
     InvoiceRepository,
+    PurchaseOrderLineRepository,
     PurchaseOrderRepository,
     SupplierRepository,
     UserRepository,
@@ -111,6 +112,29 @@ class TestPurchaseOrderRepository:
         session.commit()
         refs = [po.reference for po in repo.list_by_supplier(supplier_a.id)]
         assert refs == ["PO-A1", "PO-A2"]
+
+
+class TestPurchaseOrderLineRepository:
+    def test_create_and_list_ordered(self, session) -> None:
+        supplier = make_supplier(session)
+        po = PurchaseOrderRepository(session).create(
+            odoo_id=100, reference="PO-001", supplier_id=supplier.id
+        )
+        repo = PurchaseOrderLineRepository(session)
+        repo.create(
+            purchase_order_id=po.id, odoo_id=2, line_number=20,
+            product_ref="B", quantity="2.0",
+        )
+        repo.create(
+            purchase_order_id=po.id, odoo_id=1, line_number=10,
+            product_ref="A", quantity="1.0",
+        )
+        session.commit()
+
+        lines = repo.list_by_purchase_order(po.id)
+        assert [l.line_number for l in lines] == [10, 20]
+        assert repo.get_by_odoo_id(1) is lines[0]
+        assert repo.get_by_odoo_id(999) is None
 
 
 class TestInvoiceRepository:

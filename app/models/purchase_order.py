@@ -14,6 +14,7 @@ from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:  # pragma: no cover - évite les imports circulaires à runtime
     from app.models.invoice import Invoice
+    from app.models.purchase_order_line import PurchaseOrderLine
     from app.models.supplier import Supplier
 
 
@@ -45,6 +46,12 @@ class PurchaseOrder(Base, TimestampMixin):
 
     supplier: Mapped[Supplier] = relationship(back_populates="purchase_orders")
     invoices: Mapped[list[Invoice]] = relationship(back_populates="purchase_order")
+    lines: Mapped[list[PurchaseOrderLine]] = relationship(
+        back_populates="purchase_order",
+        cascade="all, delete-orphan",
+        order_by="PurchaseOrderLine.line_number",
+        passive_deletes=True,
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - aide au debug
         return f"<PurchaseOrder id={self.id} reference={self.reference!r}>"

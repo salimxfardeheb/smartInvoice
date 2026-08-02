@@ -10,6 +10,7 @@ from app.repositories.anomaly_repository import AnomalyRepository
 from app.repositories.base import BaseRepository
 from app.repositories.invoice_line_repository import InvoiceLineRepository
 from app.repositories.invoice_repository import InvoiceRepository
+from app.repositories.purchase_order_line_repository import PurchaseOrderLineRepository
 from app.repositories.purchase_order_repository import PurchaseOrderRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.supplier_repository import SupplierRepository
@@ -20,6 +21,7 @@ __all__ = [
     "BaseRepository",
     "InvoiceLineRepository",
     "InvoiceRepository",
+    "PurchaseOrderLineRepository",
     "PurchaseOrderRepository",
     "RefreshTokenRepository",
     "SupplierRepository",

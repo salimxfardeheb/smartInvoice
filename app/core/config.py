@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     ocr_render_dpi: int = 200
     ocr_confidence_threshold: float = 0.6
 
+    # Odoo (phase 5) : connexion XML-RPC au serveur de production.
+    # Laisser les champs vides désactive la synchronisation (le service lève
+    # alors :class:`OdooNotConfiguredError`).
+    odoo_url: str = ""
+    odoo_db: str = ""
+    odoo_username: str = ""
+    odoo_password: str = ""
+    odoo_timeout_seconds: float = 30.0
+
     @model_validator(mode="after")
     def _reject_default_secret_in_production(self) -> Settings:
         """Refuse la clé JWT par défaut en production."""

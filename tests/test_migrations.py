@@ -12,12 +12,13 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401
 from app.db.base import Base
 
-HEAD = "0003_add_invoice_file_metadata"
+HEAD = "0004_add_purchase_order_lines"
 
 EXPECTED_TABLES = {
     "users",
     "suppliers",
     "purchase_orders",
+    "purchase_order_lines",
     "invoices",
     "invoice_lines",
     "anomalies",

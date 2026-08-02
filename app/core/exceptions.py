@@ -76,3 +76,39 @@ class DocumentIllegibleError(SmartInvoiceError):
 
 class OcrEngineError(SmartInvoiceError):
     """Échec du moteur OCR ou du rendu du document."""
+
+
+class OdooError(SmartInvoiceError):
+    """Erreur d'intégration avec le serveur Odoo."""
+
+
+class OdooNotConfiguredError(OdooError):
+    """La configuration Odoo (URL, base, identifiants) est absente/incomplète."""
+
+
+class OdooConnectionError(OdooError):
+    """Impossible de joindre le serveur Odoo (réseau, timeout, protocole)."""
+
+
+class OdooAuthenticationError(OdooError):
+    """Authentification Odoo refusée (identifiants, base ou droits)."""
+
+
+class OdooModelError(OdooError):
+    """Odoo a rejeté l'appel de modèle (modèle ou champ inconnu)."""
+
+
+class MultipleSuppliersFoundError(ConflictError):
+    """Plusieurs fournisseurs correspondent au nom extrait par l'OCR."""
+
+
+class PurchaseOrderNotFoundError(NotFoundError):
+    """Aucun bon de commande ne correspond à la référence extraite."""
+
+
+class MultiplePurchaseOrdersError(ConflictError):
+    """Plusieurs bons de commande correspondent à la référence extraite."""
+
+
+class PurchaseOrderCancelledError(ConflictError):
+    """Le bon de commande correspondant est annulé (state == cancel)."""
