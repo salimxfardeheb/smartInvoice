@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     odoo_password: str = ""
     odoo_timeout_seconds: float = 30.0
 
+    # Matching (phase 6) : tolérances des écarts acceptés (ratios relatifs).
+    # Un écart (quantité, prix, montant, TVA) est toléré tant qu'il reste
+    # sous son seuil ; au-delà, une anomalie est enregistrée.
+    matching_quantity_tolerance: float = 0.05
+    matching_price_tolerance: float = 0.02
+    matching_amount_tolerance: float = 0.02
+    matching_tax_tolerance: float = 0.02
+
     @model_validator(mode="after")
     def _reject_default_secret_in_production(self) -> Settings:
         """Refuse la clé JWT par défaut en production."""

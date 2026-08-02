@@ -22,6 +22,7 @@ from app.ocr.base import OcrEngine, get_ocr_engine
 from app.repositories import UserRepository
 from app.services.auth_service import AuthService
 from app.services.invoice_service import InvoiceService
+from app.services.matching_service import MatchingService
 from app.services.ocr_service import OcrService
 from app.storage import get_storage
 from app.storage.base import Storage
@@ -123,3 +124,8 @@ def get_ocr_service(
 ) -> OcrService:
     """Fabrique le service OCR lié à la session, au stockage et au moteur."""
     return OcrService(db, storage, engine=engine)
+
+
+def get_matching_service(db: Session = Depends(get_db)) -> MatchingService:
+    """Fabrique le service de matching lié à la session courante."""
+    return MatchingService(db)

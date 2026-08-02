@@ -13,19 +13,27 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 
-from app.api.deps import get_invoice_service, get_ocr_service, require_permissions
+from app.api.deps import (
+    get_invoice_service,
+    get_matching_service,
+    get_ocr_service,
+    require_permissions,
+)
 from app.core.exceptions import DocumentNotFoundError
 from app.core.permissions import Permission
 from app.models.enums import InvoiceStatus
 from app.schemas.invoice import InvoiceListResponse, InvoiceRead, InvoiceStatusUpdate
+from app.schemas.matching import MatchingAnomalyRead, MatchingLineRead, MatchingRead
 from app.schemas.ocr import OcrResultRead
 from app.services.invoice_service import InvoiceService
+from app.services.matching_service import MatchingService
 from app.services.ocr_service import OcrService
 
 router = APIRouter()
 
 InvoiceServiceDep = Annotated[InvoiceService, Depends(get_invoice_service)]
 OcrServiceDep = Annotated[OcrService, Depends(get_ocr_service)]
+MatchingServiceDep = Annotated[MatchingService, Depends(get_matching_service)]
 InvoiceReadPerm = Annotated[
     object, Depends(require_permissions(Permission.INVOICE_READ))
 ]
@@ -168,6 +176,67 @@ def process_invoice(
         ocr_confidence_score=invoice.ocr_confidence_score,
         error_message=invoice.error_message,
         extracted_data=invoice.extracted_data,
+    )
+
+
+@router.post(
+    "/{invoice_id}/match",
+    response_model=MatchingRead,
+    summary="Rapprocher une facture à son bon de commande (matching)",
+)
+def match_invoice(
+    invoice_id: int,
+    service: InvoiceServiceDep = None,
+    matching: MatchingServiceDep = None,
+    _: InvoiceReadPerm = None,
+) -> MatchingRead:
+    """Exécute le rapprochement facture ↔ bon de commande (phase 6).
+
+    Compare le fournisseur, rapproche les lignes (produit, quantité, prix),
+    compare les montants et la TVA, puis calcule et persiste le score de
+    matching global sur la facture. Les anomalies détectées sont enregistrées
+    par catégorie (montant, TVA, quantité, produit absent, doublon...).
+    """
+    invoice = service.get_invoice(invoice_id)
+    result = matching.match(invoice)
+
+    extracted = (invoice.extracted_data or {}).get("general") or {}
+    reference = (
+        extracted.get("purchase_order_reference")
+        if isinstance(extracted, dict)
+        else None
+    )
+    return MatchingRead(
+        invoice_id=result.invoice_id,
+        purchase_order_reference=reference,
+        supplier_match=result.supplier_match,
+        duplicate_found=result.duplicate_found,
+        score=result.score,
+        lines=[
+            MatchingLineRead(
+                line_number=line.invoice_line.line_number,
+                description=line.invoice_line.description,
+                product_ref=line.invoice_line.product_ref,
+                quantity=line.invoice_line.quantity,
+                unit_price=line.invoice_line.unit_price,
+                purchase_order_line_odoo_id=line.invoice_line.purchase_order_line_odoo_id,
+                quantity_matched=line.quantity_matched,
+                unit_price_matched=line.unit_price_matched,
+                quantity_delta=line.quantity_delta,
+                unit_price_delta=line.unit_price_delta,
+            )
+            for line in result.line_matches
+        ],
+        anomalies=[
+            MatchingAnomalyRead(
+                category=anomaly.category,
+                severity=anomaly.severity,
+                message=anomaly.message,
+                expected_value=anomaly.expected_value,
+                actual_value=anomaly.actual_value,
+            )
+            for anomaly in result.anomalies
+        ],
     )
 
 

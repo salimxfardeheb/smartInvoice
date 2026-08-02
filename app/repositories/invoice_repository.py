@@ -101,6 +101,22 @@ class InvoiceRepository(BaseRepository[Invoice]):
         """Indique si une facture identique (fournisseur, numéro) existe déjà."""
         return self.get_by_supplier_and_number(supplier_id, invoice_number) is not None
 
+    def find_other_with_supplier_number(
+        self, invoice_id: int, supplier_id: int, invoice_number: str
+    ) -> Invoice | None:
+        """Retourne une facture (fournisseur, numéro) distincte de ``invoice_id``.
+
+        Utile pour la détection de doublon pendant le matching : le couple
+        étant unique en base, la recherche exclut la facture en cours pour
+        ne pas se détecter elle-même.
+        """
+        stmt = select(Invoice).where(
+            Invoice.supplier_id == supplier_id,
+            Invoice.invoice_number == invoice_number,
+            Invoice.id != invoice_id,
+        )
+        return self.session.scalars(stmt).first()
+
     # --- Filtres ---------------------------------------------------------------
 
     def filter(
