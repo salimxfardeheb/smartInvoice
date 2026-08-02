@@ -68,3 +68,11 @@ class InvalidStatusTransitionError(ConflictError):
 
 class InvalidDocumentError(SmartInvoiceError):
     """Document non supporté, corrompu ou illisible."""
+
+
+class DocumentIllegibleError(SmartInvoiceError):
+    """Aucun texte exploitable n'a pu être extrait par l'OCR."""
+
+
+class OcrEngineError(SmartInvoiceError):
+    """Échec du moteur OCR ou du rendu du document."""

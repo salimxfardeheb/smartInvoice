@@ -18,9 +18,11 @@ from app.core.security import TOKEN_TYPE_ACCESS, decode_token
 from app.db.session import SessionLocal
 from app.models.enums import UserRole
 from app.models.user import User
+from app.ocr.base import OcrEngine, get_ocr_engine
 from app.repositories import UserRepository
 from app.services.auth_service import AuthService
 from app.services.invoice_service import InvoiceService
+from app.services.ocr_service import OcrService
 from app.storage import get_storage
 from app.storage.base import Storage
 
@@ -107,3 +109,17 @@ def get_invoice_service(
 ) -> InvoiceService:
     """Fabrique le service des factures lié à la session et au stockage."""
     return InvoiceService(db, storage)
+
+
+def get_ocr_engine_dep() -> OcrEngine:
+    """Dépendance FastAPI : moteur OCR (remplaçable dans les tests)."""
+    return get_ocr_engine()
+
+
+def get_ocr_service(
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+    engine: OcrEngine = Depends(get_ocr_engine_dep),
+) -> OcrService:
+    """Fabrique le service OCR lié à la session, au stockage et au moteur."""
+    return OcrService(db, storage, engine=engine)

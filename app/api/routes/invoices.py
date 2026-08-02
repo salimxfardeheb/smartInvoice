@@ -13,16 +13,19 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 
-from app.api.deps import get_invoice_service, require_permissions
+from app.api.deps import get_invoice_service, get_ocr_service, require_permissions
 from app.core.exceptions import DocumentNotFoundError
 from app.core.permissions import Permission
 from app.models.enums import InvoiceStatus
 from app.schemas.invoice import InvoiceListResponse, InvoiceRead, InvoiceStatusUpdate
+from app.schemas.ocr import OcrResultRead
 from app.services.invoice_service import InvoiceService
+from app.services.ocr_service import OcrService
 
 router = APIRouter()
 
 InvoiceServiceDep = Annotated[InvoiceService, Depends(get_invoice_service)]
+OcrServiceDep = Annotated[OcrService, Depends(get_ocr_service)]
 InvoiceReadPerm = Annotated[
     object, Depends(require_permissions(Permission.INVOICE_READ))
 ]
@@ -138,6 +141,33 @@ def get_invoice_file(
                 invoice.original_filename or f"facture-{invoice.id}"
             )
         },
+    )
+
+
+@router.post(
+    "/{invoice_id}/process",
+    response_model=OcrResultRead,
+    summary="Lancer l'analyse OCR d'une facture",
+)
+def process_invoice(
+    invoice_id: int,
+    service: InvoiceServiceDep = None,
+    ocr: OcrServiceDep = None,
+    _: InvoiceDepositPerm = None,
+) -> OcrResultRead:
+    """Exécute le pipeline OCR (chargement, reconnaissance, structuration).
+
+    La facture doit être « Déposée » ou « Erreur système ». En cas de succès
+    elle passe « À vérifier » ; sinon « Erreur système » avec le message.
+    """
+    invoice = service.get_invoice(invoice_id)
+    ocr.process(invoice)
+    return OcrResultRead(
+        invoice_id=invoice.id,
+        status=invoice.status,
+        ocr_confidence_score=invoice.ocr_confidence_score,
+        error_message=invoice.error_message,
+        extracted_data=invoice.extracted_data,
     )
 
 

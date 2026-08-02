@@ -25,7 +25,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="SmartInvoice API",
         description="OCR & rapprochement automatique des factures fournisseurs.",
-        version="0.3.0",
+        version="0.4.0",
     )
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

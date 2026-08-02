@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     storage_root: str = "storage"
     max_upload_size_mb: int = 20
 
+    # OCR (phase 4)
+    ocr_lang: str = "fr"
+    ocr_render_dpi: int = 200
+    ocr_confidence_threshold: float = 0.6
+
     @model_validator(mode="after")
     def _reject_default_secret_in_production(self) -> Settings:
         """Refuse la clé JWT par défaut en production."""
