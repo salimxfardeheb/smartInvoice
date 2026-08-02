@@ -40,3 +40,31 @@ class PermissionDeniedError(SmartInvoiceError):
 
 class UserAlreadyExistsError(SmartInvoiceError):
     """Un utilisateur avec ce nom d'utilisateur ou cet email existe déjà."""
+
+
+class NotFoundError(SmartInvoiceError):
+    """Ressource introuvable."""
+
+
+class SupplierNotFoundError(NotFoundError):
+    """Le fournisseur référencé n'existe pas."""
+
+
+class DocumentNotFoundError(NotFoundError):
+    """Le fichier source d'une facture est absent ou introuvable."""
+
+
+class ConflictError(SmartInvoiceError):
+    """Conflit avec l'état actuel de la ressource."""
+
+
+class DuplicateInvoiceError(ConflictError):
+    """Une facture identique (fournisseur + numéro) existe déjà."""
+
+
+class InvalidStatusTransitionError(ConflictError):
+    """Transition de statut non autorisée."""
+
+
+class InvalidDocumentError(SmartInvoiceError):
+    """Document non supporté, corrompu ou illisible."""

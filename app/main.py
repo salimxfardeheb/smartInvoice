@@ -9,9 +9,12 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.routes import auth, users
+from app.api.routes import auth, invoices, users
 from app.core.exceptions import (
     AuthenticationError,
+    ConflictError,
+    InvalidDocumentError,
+    NotFoundError,
     PermissionDeniedError,
     UserAlreadyExistsError,
 )
@@ -22,11 +25,12 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="SmartInvoice API",
         description="OCR & rapprochement automatique des factures fournisseurs.",
-        version="0.2.0",
+        version="0.3.0",
     )
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(users.router, prefix="/api/users", tags=["users"])
+    app.include_router(invoices.router, prefix="/api/invoices", tags=["invoices"])
 
     @app.exception_handler(AuthenticationError)
     async def _handle_authentication(
@@ -40,11 +44,29 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return JSONResponse(status_code=403, content={"detail": str(exc)})
 
+    @app.exception_handler(NotFoundError)
+    async def _handle_not_found(
+        _request: Request, exc: NotFoundError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
     @app.exception_handler(UserAlreadyExistsError)
     async def _handle_conflict(
         _request: Request, exc: UserAlreadyExistsError
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(ConflictError)
+    async def _handle_conflict_generic(
+        _request: Request, exc: ConflictError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(InvalidDocumentError)
+    async def _handle_invalid_document(
+        _request: Request, exc: InvalidDocumentError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     return app
 

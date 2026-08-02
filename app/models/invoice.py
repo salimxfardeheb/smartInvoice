@@ -104,6 +104,9 @@ class Invoice(Base, TimestampMixin):
         BigInteger
     )  # id de la account.move Odoo (phase 7)
     file_path: Mapped[str | None] = mapped_column(String(500))
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    content_type: Mapped[str | None] = mapped_column(String(100))
+    file_size: Mapped[int | None] = mapped_column(BigInteger)
     extracted_data: Mapped[dict | None] = mapped_column(JsonType)
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
@@ -126,6 +129,17 @@ class Invoice(Base, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+    @property
+    def file_info(self) -> dict | None:
+        """Métadonnées du fichier source (None si aucune facture déposée)."""
+        if self.original_filename is None:
+            return None
+        return {
+            "original_filename": self.original_filename,
+            "content_type": self.content_type,
+            "size": self.file_size,
+        }
 
     def __repr__(self) -> str:  # pragma: no cover - aide au debug
         return (

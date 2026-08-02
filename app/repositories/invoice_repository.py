@@ -14,6 +14,14 @@ from app.models.enums import InvoiceStatus
 from app.models.invoice import Invoice
 from app.repositories.base import BaseRepository
 
+# Modes de tri acceptés par ``filter`` (clé → expression SQLAlchemy).
+SORT_ORDERS: dict[str, tuple] = {
+    "created_at_desc": (Invoice.created_at.desc(), Invoice.id.desc()),
+    "created_at_asc": (Invoice.created_at.asc(), Invoice.id.asc()),
+    "issue_date_desc": (Invoice.issue_date.desc(), Invoice.created_at.desc()),
+    "issue_date_asc": (Invoice.issue_date.asc(), Invoice.created_at.desc()),
+}
+
 
 class InvoiceRepository(BaseRepository[Invoice]):
     """Accès aux données des factures."""
@@ -39,6 +47,9 @@ class InvoiceRepository(BaseRepository[Invoice]):
         matching_score: float | None = None,
         vendor_bill_id: int | None = None,
         file_path: str | None = None,
+        original_filename: str | None = None,
+        content_type: str | None = None,
+        file_size: int | None = None,
         extracted_data: dict | None = None,
         rejection_reason: str | None = None,
         error_message: str | None = None,
@@ -62,6 +73,9 @@ class InvoiceRepository(BaseRepository[Invoice]):
                 matching_score=matching_score,
                 vendor_bill_id=vendor_bill_id,
                 file_path=file_path,
+                original_filename=original_filename,
+                content_type=content_type,
+                file_size=file_size,
                 extracted_data=extracted_data,
                 rejection_reason=rejection_reason,
                 error_message=error_message,
@@ -98,13 +112,15 @@ class InvoiceRepository(BaseRepository[Invoice]):
         issue_date_to: date | None = None,
         created_from: datetime | None = None,
         created_to: datetime | None = None,
+        sort: str = "created_at_desc",
         limit: int = 100,
         offset: int = 0,
     ) -> list[Invoice]:
         """Filtre les factures selon les critères fournis (tous facultatifs).
 
         Les critères peuvent être combinés (statut ET fournisseur ET période).
-        La pagination est contrôlée par ``limit`` / ``offset``.
+        ``sort`` est l'un des modes de :data:`SORT_ORDERS`. La pagination est
+        contrôlée par ``limit`` / ``offset``.
         """
         stmt = select(Invoice)
         if status is not None:
@@ -120,7 +136,7 @@ class InvoiceRepository(BaseRepository[Invoice]):
         if created_to is not None:
             stmt = stmt.where(Invoice.created_at <= created_to)
         stmt = (
-            stmt.order_by(Invoice.created_at.desc(), Invoice.id.desc())
+            stmt.order_by(*SORT_ORDERS.get(sort, SORT_ORDERS["created_at_desc"]))
             .limit(limit)
             .offset(offset)
         )

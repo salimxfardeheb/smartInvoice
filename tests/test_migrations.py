@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401
 from app.db.base import Base
 
-HEAD = "0002_add_refresh_tokens"
+HEAD = "0003_add_invoice_file_metadata"
 
 EXPECTED_TABLES = {
     "users",

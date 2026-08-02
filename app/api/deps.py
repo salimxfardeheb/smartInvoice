@@ -20,6 +20,9 @@ from app.models.enums import UserRole
 from app.models.user import User
 from app.repositories import UserRepository
 from app.services.auth_service import AuthService
+from app.services.invoice_service import InvoiceService
+from app.storage import get_storage
+from app.storage.base import Storage
 
 # URL du endpoint de connexion (formulaire OAuth2) pour l'UI Swagger.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -97,3 +100,10 @@ def require_roles(*roles: UserRole) -> Callable[[User], User]:
 def get_auth_service(db: Session = Depends(get_db)) -> AuthService:
     """Fabrique le service d'authentification lié à la session courante."""
     return AuthService(db)
+
+
+def get_invoice_service(
+    db: Session = Depends(get_db), storage: Storage = Depends(get_storage)
+) -> InvoiceService:
+    """Fabrique le service des factures lié à la session et au stockage."""
+    return InvoiceService(db, storage)

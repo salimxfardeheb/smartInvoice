@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
+    # Stockage des documents
+    storage_root: str = "storage"
+    max_upload_size_mb: int = 20
+
     @model_validator(mode="after")
     def _reject_default_secret_in_production(self) -> Settings:
         """Refuse la clé JWT par défaut en production."""
