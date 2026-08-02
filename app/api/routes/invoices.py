@@ -14,26 +14,38 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 
 from app.api.deps import (
+    get_audit_log_repository,
     get_invoice_service,
     get_matching_service,
     get_ocr_service,
+    get_validation_service,
     require_permissions,
 )
 from app.core.exceptions import DocumentNotFoundError
 from app.core.permissions import Permission
 from app.models.enums import InvoiceStatus
+from app.models.user import User
+from app.repositories import AuditLogRepository
 from app.schemas.invoice import InvoiceListResponse, InvoiceRead, InvoiceStatusUpdate
 from app.schemas.matching import MatchingAnomalyRead, MatchingLineRead, MatchingRead
 from app.schemas.ocr import OcrResultRead
+from app.schemas.validation import (
+    AuditLogRead,
+    InvoiceCorrection,
+    InvoiceReject,
+)
 from app.services.invoice_service import InvoiceService
 from app.services.matching_service import MatchingService
 from app.services.ocr_service import OcrService
+from app.services.validation_service import ValidationService
 
 router = APIRouter()
 
 InvoiceServiceDep = Annotated[InvoiceService, Depends(get_invoice_service)]
 OcrServiceDep = Annotated[OcrService, Depends(get_ocr_service)]
 MatchingServiceDep = Annotated[MatchingService, Depends(get_matching_service)]
+ValidationServiceDep = Annotated[ValidationService, Depends(get_validation_service)]
+AuditLogRepoDep = Annotated[AuditLogRepository, Depends(get_audit_log_repository)]
 InvoiceReadPerm = Annotated[
     object, Depends(require_permissions(Permission.INVOICE_READ))
 ]
@@ -254,3 +266,85 @@ def update_invoice_status(
     """Applique une transition de statut si elle est valide (409 sinon)."""
     invoice = service.get_invoice(invoice_id)
     return service.transition_status(invoice, payload.status, reason=payload.reason)
+
+
+@router.post(
+    "/{invoice_id}/validate",
+    response_model=InvoiceRead,
+    summary="Valider une facture",
+)
+def validate_invoice(
+    invoice_id: int,
+    service: InvoiceServiceDep = None,
+    validation: ValidationServiceDep = None,
+    user: User = Depends(require_permissions(Permission.INVOICE_VALIDATE)),
+) -> object:
+    """Valide une facture « À vérifier » (action tracée dans le journal d'audit)."""
+    invoice = service.get_invoice(invoice_id)
+    return validation.validate(invoice, user)
+
+
+@router.post(
+    "/{invoice_id}/reject",
+    response_model=InvoiceRead,
+    summary="Rejeter une facture (motif obligatoire)",
+)
+def reject_invoice(
+    invoice_id: int,
+    payload: InvoiceReject,
+    service: InvoiceServiceDep = None,
+    validation: ValidationServiceDep = None,
+    user: User = Depends(require_permissions(Permission.INVOICE_VALIDATE)),
+) -> object:
+    """Rejette une facture avec un motif obligatoire (tracé dans l'audit)."""
+    invoice = service.get_invoice(invoice_id)
+    return validation.reject(invoice, user, payload.reason)
+
+
+@router.put(
+    "/{invoice_id}/correct",
+    response_model=InvoiceRead,
+    summary="Corriger manuellement les données extraites d'une facture",
+)
+def correct_invoice(
+    invoice_id: int,
+    payload: InvoiceCorrection,
+    service: InvoiceServiceDep = None,
+    validation: ValidationServiceDep = None,
+    user: User = Depends(require_permissions(Permission.INVOICE_CORRECT)),
+) -> object:
+    """Corrige les champs et/ou les lignes d'une facture « À vérifier »."""
+    invoice = service.get_invoice(invoice_id)
+    return validation.correct(invoice, user, payload)
+
+
+@router.post(
+    "/{invoice_id}/vendor-bill",
+    response_model=InvoiceRead,
+    summary="Créer la Vendor Bill Odoo (account.move) d'une facture validée",
+)
+def create_vendor_bill(
+    invoice_id: int,
+    service: InvoiceServiceDep = None,
+    validation: ValidationServiceDep = None,
+    user: User = Depends(require_permissions(Permission.INVOICE_VALIDATE)),
+) -> object:
+    """Génère l'``account.move`` Odoo et lie le ``move_id`` à la facture."""
+    invoice = service.get_invoice(invoice_id)
+    return validation.create_vendor_bill(invoice, user)
+
+
+@router.get(
+    "/{invoice_id}/audit-logs",
+    response_model=list[AuditLogRead],
+    summary="Journal d'audit d'une facture",
+)
+def list_audit_logs(
+    invoice_id: int,
+    service: InvoiceServiceDep = None,
+    audit_logs: AuditLogRepoDep = None,
+    _: object = Depends(require_permissions(Permission.JOURNAL_READ)),
+) -> list[AuditLogRead]:
+    """Retourne l'historique des actions (qui, quand, quoi) sur une facture."""
+    service.get_invoice(invoice_id)  # 404 si la facture n'existe pas
+    return audit_logs.list_by_invoice(invoice_id)

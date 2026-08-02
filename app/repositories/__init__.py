@@ -7,6 +7,7 @@ filtrage.
 """
 
 from app.repositories.anomaly_repository import AnomalyRepository
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.repositories.base import BaseRepository
 from app.repositories.invoice_line_repository import InvoiceLineRepository
 from app.repositories.invoice_repository import InvoiceRepository
@@ -18,6 +19,7 @@ from app.repositories.user_repository import UserRepository
 
 __all__ = [
     "AnomalyRepository",
+    "AuditLogRepository",
     "BaseRepository",
     "InvoiceLineRepository",
     "InvoiceRepository",

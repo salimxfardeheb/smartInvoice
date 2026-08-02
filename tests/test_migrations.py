@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401
 from app.db.base import Base
 
-HEAD = "0004_add_purchase_order_lines"
+HEAD = "0005_add_audit_logs"
 
 EXPECTED_TABLES = {
     "users",
@@ -22,6 +22,7 @@ EXPECTED_TABLES = {
     "invoices",
     "invoice_lines",
     "anomalies",
+    "audit_logs",
     "refresh_tokens",
 }
 

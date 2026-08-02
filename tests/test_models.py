@@ -33,6 +33,7 @@ EXPECTED_TABLES = {
     "invoices",
     "invoice_lines",
     "anomalies",
+    "audit_logs",
     "refresh_tokens",
 }
 

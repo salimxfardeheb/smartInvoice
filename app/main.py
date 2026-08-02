@@ -15,6 +15,7 @@ from app.core.exceptions import (
     ConflictError,
     InvalidDocumentError,
     NotFoundError,
+    OdooError,
     PermissionDeniedError,
     UserAlreadyExistsError,
 )
@@ -67,6 +68,12 @@ def create_app() -> FastAPI:
         _request: Request, exc: InvalidDocumentError
     ) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(OdooError)
+    async def _handle_odoo_error(
+        _request: Request, exc: OdooError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
 
     return app
 

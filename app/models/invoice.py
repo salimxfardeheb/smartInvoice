@@ -32,6 +32,7 @@ from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:  # pragma: no cover - évite les imports circulaires à runtime
     from app.models.anomaly import Anomaly
+    from app.models.audit_log import AuditLog
     from app.models.invoice_line import InvoiceLine
     from app.models.purchase_order import PurchaseOrder
     from app.models.supplier import Supplier
@@ -125,6 +126,11 @@ class Invoice(Base, TimestampMixin):
         passive_deletes=True,
     )
     anomalies: Mapped[list[Anomaly]] = relationship(
+        back_populates="invoice",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    audit_logs: Mapped[list[AuditLog]] = relationship(
         back_populates="invoice",
         cascade="all, delete-orphan",
         passive_deletes=True,

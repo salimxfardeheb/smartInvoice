@@ -185,6 +185,21 @@ class OdooClient:
             )
         )
 
+    def create(self, model: str, values: dict) -> int:
+        """Crée un enregistrement et retourne son identifiant.
+
+        Les champs relationnels « one2many » sont passés sous forme de
+        commandes Odoo (ex. ``[(0, 0, {...})]`` pour ``invoice_line_ids``).
+        """
+        uid = self.authenticate()
+        models = self._get_models()
+        record_id = self._call(
+            lambda: models.execute_kw(
+                self.db, uid, self.password, model, "create", [values]
+            )
+        )
+        return int(record_id)
+
     # --- Internes -----------------------------------------------------------------
 
     def _get_common(self) -> xmlrpc.client.ServerProxy:

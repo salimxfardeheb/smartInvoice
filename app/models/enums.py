@@ -67,3 +67,12 @@ class AnomalySeverity(str, enum.Enum):
     INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"
+
+
+class AuditAction(str, enum.Enum):
+    """Action enregistrée dans le journal d'audit d'une facture (phase 7)."""
+
+    VALIDATED = "validation"
+    CORRECTED = "correction"
+    REJECTED = "rejet"
+    VENDOR_BILL_CREATED = "vendor_bill_créée"

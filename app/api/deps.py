@@ -19,11 +19,12 @@ from app.db.session import SessionLocal
 from app.models.enums import UserRole
 from app.models.user import User
 from app.ocr.base import OcrEngine, get_ocr_engine
-from app.repositories import UserRepository
+from app.repositories import AuditLogRepository, UserRepository
 from app.services.auth_service import AuthService
 from app.services.invoice_service import InvoiceService
 from app.services.matching_service import MatchingService
 from app.services.ocr_service import OcrService
+from app.services.validation_service import ValidationService
 from app.storage import get_storage
 from app.storage.base import Storage
 
@@ -129,3 +130,15 @@ def get_ocr_service(
 def get_matching_service(db: Session = Depends(get_db)) -> MatchingService:
     """Fabrique le service de matching lié à la session courante."""
     return MatchingService(db)
+
+
+def get_validation_service(db: Session = Depends(get_db)) -> ValidationService:
+    """Fabrique le service de validation comptable lié à la session courante."""
+    return ValidationService(db)
+
+
+def get_audit_log_repository(
+    db: Session = Depends(get_db),
+) -> AuditLogRepository:
+    """Fabrique le repository du journal d'audit lié à la session courante."""
+    return AuditLogRepository(db)

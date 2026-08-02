@@ -66,6 +66,10 @@ class InvalidStatusTransitionError(ConflictError):
     """Transition de statut non autorisée."""
 
 
+class RejectionReasonRequiredError(ConflictError):
+    """Le motif de rejet est obligatoire pour rejeter une facture."""
+
+
 class InvalidDocumentError(SmartInvoiceError):
     """Document non supporté, corrompu ou illisible."""
 
