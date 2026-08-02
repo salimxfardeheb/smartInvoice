@@ -40,6 +40,7 @@ class InvoiceRead(BaseModel):
     matching_score: float | None
     vendor_bill_id: int | None
     file_info: dict | None
+    extracted_data: dict | None
     rejection_reason: str | None
     error_message: str | None
     is_duplicate: bool

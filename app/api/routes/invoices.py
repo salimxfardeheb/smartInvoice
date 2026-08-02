@@ -14,6 +14,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 
 from app.api.deps import (
+    get_anomaly_repository,
     get_audit_log_repository,
     get_invoice_service,
     get_matching_service,
@@ -25,10 +26,11 @@ from app.core.exceptions import DocumentNotFoundError
 from app.core.permissions import Permission
 from app.models.enums import InvoiceStatus
 from app.models.user import User
-from app.repositories import AuditLogRepository
+from app.repositories import AnomalyRepository, AuditLogRepository
 from app.schemas.invoice import InvoiceListResponse, InvoiceRead, InvoiceStatusUpdate
 from app.schemas.matching import MatchingAnomalyRead, MatchingLineRead, MatchingRead
 from app.schemas.ocr import OcrResultRead
+from app.schemas.summary import DashboardSummary, PendingAnomaly
 from app.schemas.validation import (
     AuditLogRead,
     InvoiceCorrection,
@@ -46,6 +48,7 @@ OcrServiceDep = Annotated[OcrService, Depends(get_ocr_service)]
 MatchingServiceDep = Annotated[MatchingService, Depends(get_matching_service)]
 ValidationServiceDep = Annotated[ValidationService, Depends(get_validation_service)]
 AuditLogRepoDep = Annotated[AuditLogRepository, Depends(get_audit_log_repository)]
+AnomalyRepoDep = Annotated[AnomalyRepository, Depends(get_anomaly_repository)]
 InvoiceReadPerm = Annotated[
     object, Depends(require_permissions(Permission.INVOICE_READ))
 ]
@@ -123,6 +126,43 @@ def list_invoices(
         offset=offset,
     )
     return InvoiceListResponse(items=items, total=total)
+
+
+@router.get(
+    "/summary",
+    response_model=DashboardSummary,
+    summary="Synthèse du tableau de bord (comptes par statut, anomalies)",
+)
+def invoice_summary(
+    service: InvoiceServiceDep = None,
+    anomalies: AnomalyRepoDep = None,
+    _: InvoiceReadPerm = None,
+) -> DashboardSummary:
+    """Retourne le nombre de factures par statut et les anomalies non résolues.
+
+    Utilisé par le tableau de bord : comptage par statut via la pagination et
+    liste des anomalies en attente (priorité aux plus anciennes).
+    """
+    by_status = {
+        status.value: service.list_invoices(status=status, limit=1)[1]
+        for status in InvoiceStatus
+    }
+    pending = [
+        PendingAnomaly(
+            id=anomaly.id,
+            invoice_id=anomaly.invoice_id,
+            invoice_number=anomaly.invoice.invoice_number,
+            supplier_name=anomaly.invoice.supplier.name,
+            category=anomaly.category,
+            severity=anomaly.severity,
+            message=anomaly.message,
+            expected_value=anomaly.expected_value,
+            actual_value=anomaly.actual_value,
+            created_at=anomaly.created_at,
+        )
+        for anomaly in anomalies.list_unresolved(limit=100)
+    ]
+    return DashboardSummary(by_status=by_status, pending_anomalies=pending)
 
 
 @router.get(

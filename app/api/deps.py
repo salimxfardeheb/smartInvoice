@@ -19,7 +19,11 @@ from app.db.session import SessionLocal
 from app.models.enums import UserRole
 from app.models.user import User
 from app.ocr.base import OcrEngine, get_ocr_engine
-from app.repositories import AuditLogRepository, UserRepository
+from app.repositories import (
+    AnomalyRepository,
+    AuditLogRepository,
+    UserRepository,
+)
 from app.services.auth_service import AuthService
 from app.services.invoice_service import InvoiceService
 from app.services.matching_service import MatchingService
@@ -142,3 +146,10 @@ def get_audit_log_repository(
 ) -> AuditLogRepository:
     """Fabrique le repository du journal d'audit lié à la session courante."""
     return AuditLogRepository(db)
+
+
+def get_anomaly_repository(
+    db: Session = Depends(get_db),
+) -> AnomalyRepository:
+    """Fabrique le repository des anomalies lié à la session courante."""
+    return AnomalyRepository(db)
