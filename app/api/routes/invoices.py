@@ -7,6 +7,7 @@ crée la facture liée au fournisseur fourni.
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime
 from typing import Annotated
 from urllib.parse import quote
@@ -19,20 +20,25 @@ from app.api.deps import (
     get_confirmation_service,
     get_invoice_service,
     get_matching_service,
-    get_ocr_service,
+    get_ocr_engine_dep,
+    get_storage,
+    get_task_manager,
     get_validation_service,
     require_permissions,
 )
 from app.core.exceptions import (
+    ConflictError,
     DocumentNotFoundError,
     InvalidStatusTransitionError,
     NotFoundError,
     SmartInvoiceError,
 )
 from app.core.permissions import Permission
-from app.models.enums import AuditAction, InvoiceStatus
+from app.core.metrics import get_metrics
+from app.models.enums import AuditAction, InvoiceStatus, TaskKind
 from app.models.user import User
-from app.repositories import AnomalyRepository, AuditLogRepository
+from app.ocr.base import OcrEngine
+from app.repositories import AnomalyRepository, AuditLogRepository, InvoiceRepository
 from app.schemas.invoice import (
     BatchDepositResponse,
     BatchDepositResult,
@@ -41,7 +47,7 @@ from app.schemas.invoice import (
     InvoiceStatusUpdate,
 )
 from app.schemas.matching import MatchingAnomalyRead, MatchingLineRead, MatchingRead
-from app.schemas.ocr import OcrResultRead
+from app.schemas.task import TaskRead, task_read
 from app.schemas.anomaly import AnomalyRead
 from app.schemas.summary import DashboardSummary, PendingAnomaly
 from app.schemas.validation import (
@@ -55,12 +61,16 @@ from app.services.confirmation_service import BuyerConfirmationService
 from app.services.invoice_service import InvoiceService
 from app.services.matching_service import MatchingService
 from app.services.ocr_service import OcrService
+from app.services.task_manager import TaskManager
 from app.services.validation_service import ValidationService
+from app.storage.base import Storage
 
 router = APIRouter()
 
 InvoiceServiceDep = Annotated[InvoiceService, Depends(get_invoice_service)]
-OcrServiceDep = Annotated[OcrService, Depends(get_ocr_service)]
+TaskManagerDep = Annotated[TaskManager, Depends(get_task_manager)]
+StorageDep = Annotated[Storage, Depends(get_storage)]
+EngineDep = Annotated[OcrEngine, Depends(get_ocr_engine_dep)]
 MatchingServiceDep = Annotated[MatchingService, Depends(get_matching_service)]
 ValidationServiceDep = Annotated[ValidationService, Depends(get_validation_service)]
 ConfirmationServiceDep = Annotated[
@@ -270,29 +280,54 @@ def get_invoice_file(
 
 @router.post(
     "/{invoice_id}/process",
-    response_model=OcrResultRead,
-    summary="Lancer l'analyse OCR d'une facture",
+    response_model=TaskRead,
+    status_code=202,
+    summary="Lancer l'analyse OCR d'une facture (tâche asynchrone)",
 )
 def process_invoice(
     invoice_id: int,
     service: InvoiceServiceDep = None,
-    ocr: OcrServiceDep = None,
+    manager: TaskManagerDep = None,
+    engine: EngineDep = None,
+    storage: StorageDep = None,
     _: InvoiceDepositPerm = None,
-) -> OcrResultRead:
-    """Exécute le pipeline OCR (chargement, reconnaissance, structuration).
+) -> TaskRead:
+    """Planifie le pipeline OCR (chargement, reconnaissance, structuration).
 
-    La facture doit être « Déposée » ou « Erreur système ». En cas de succès
-    elle passe « À vérifier » ; sinon « Erreur système » avec le message.
+    L'analyse est exécutée **en arrière-plan** : la requête retourne
+    immédiatement un ``task_id`` (statut ``PENDING``/``RUNNING``) à interroger
+    via ``GET /api/tasks/{task_id}``. La facture doit être « Déposée » ou
+    « Erreur système » ; si elle est déjà « En cours d'analyse » (traitement
+    concurrent), une réponse 409 est retournée.
     """
     invoice = service.get_invoice(invoice_id)
-    ocr.process(invoice)
-    return OcrResultRead(
-        invoice_id=invoice.id,
-        status=invoice.status,
-        ocr_confidence_score=invoice.ocr_confidence_score,
-        error_message=invoice.error_message,
-        extracted_data=invoice.extracted_data,
-    )
+    if invoice.status is InvoiceStatus.ANALYZING:
+        raise ConflictError(
+            "Une analyse OCR est déjà en cours pour cette facture."
+        )
+
+    def run(task_manager: TaskManager) -> dict:
+        timer = time.monotonic()
+        with task_manager.session_factory() as session:
+            worker_invoice = InvoiceRepository(session).get(invoice_id)
+            ocr = OcrService(session, storage, engine=engine)
+            updated = ocr.process(worker_invoice)
+            session.commit()
+        get_metrics().record(
+            "ocr_pipeline_seconds",
+            time.monotonic() - timer,
+            success=updated.status is not InvoiceStatus.SYSTEM_ERROR,
+        )
+        return {
+            "invoice_id": updated.id,
+            "status": updated.status.value,
+            "ocr_confidence_score": updated.ocr_confidence_score,
+            "error_message": updated.error_message,
+        }
+
+    task_id = manager.submit(kind=TaskKind.OCR, invoice_id=invoice_id, run=run)
+    task = manager.get_task(task_id)
+    return task_read(task)
 
 
 @router.post(
@@ -314,7 +349,13 @@ def match_invoice(
     par catégorie (montant, TVA, quantité, produit absent, doublon...).
     """
     invoice = service.get_invoice(invoice_id)
+    timer = time.monotonic()
     result = matching.match(invoice)
+    get_metrics().record(
+        "matching_pipeline_seconds",
+        time.monotonic() - timer,
+        success=result.score is not None,
+    )
 
     extracted = (invoice.extracted_data or {}).get("general") or {}
     reference = (
@@ -482,21 +523,23 @@ def confirm_invoice(
 
 @router.post(
     "/{invoice_id}/retry",
-    response_model=OcrResultRead,
-    summary="Ré-analyser une facture en « Erreur système »",
+    response_model=TaskRead,
+    status_code=202,
+    summary="Ré-analyser une facture en « Erreur système » (tâche asynchrone)",
 )
 def retry_invoice(
     invoice_id: int,
     service: InvoiceServiceDep = None,
-    ocr: OcrServiceDep = None,
+    manager: TaskManagerDep = None,
+    engine: EngineDep = None,
+    storage: StorageDep = None,
     audit_logs: AuditLogRepoDep = None,
     user: User = Depends(require_permissions(Permission.INVOICE_DEPOSIT)),
-) -> OcrResultRead:
+) -> TaskRead:
     """Relance le pipeline OCR d'une facture « Erreur système ».
 
     Exige l'état « Erreur système » (409 sinon) et trace une entrée d'audit
-    ``re_analyse`` précisant le contexte (statut avant relance, message
-    d'erreur précédent) avant de relancer l'analyse.
+    ``re_analyse`` précisant le contexte avant de planifier la ré-analyse.
     """
     invoice = service.get_invoice(invoice_id)
     if invoice.status is not InvoiceStatus.SYSTEM_ERROR:
@@ -514,14 +557,28 @@ def retry_invoice(
             "previous_error": invoice.error_message,
         },
     )
-    ocr.process(invoice)
-    return OcrResultRead(
-        invoice_id=invoice.id,
-        status=invoice.status,
-        ocr_confidence_score=invoice.ocr_confidence_score,
-        error_message=invoice.error_message,
-        extracted_data=invoice.extracted_data,
-    )
+
+    def run(task_manager: TaskManager) -> dict:
+        timer = time.monotonic()
+        with task_manager.session_factory() as session:
+            worker_invoice = InvoiceRepository(session).get(invoice_id)
+            ocr = OcrService(session, storage, engine=engine)
+            updated = ocr.process(worker_invoice)
+            session.commit()
+        get_metrics().record(
+            "ocr_pipeline_seconds",
+            time.monotonic() - timer,
+            success=updated.status is not InvoiceStatus.SYSTEM_ERROR,
+        )
+        return {
+            "invoice_id": updated.id,
+            "status": updated.status.value,
+            "ocr_confidence_score": updated.ocr_confidence_score,
+            "error_message": updated.error_message,
+        }
+
+    task_id = manager.submit(kind=TaskKind.OCR, invoice_id=invoice_id, run=run)
+    return task_read(manager.get_task(task_id))
 
 
 @router.post(

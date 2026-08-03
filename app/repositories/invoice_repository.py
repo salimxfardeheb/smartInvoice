@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.models.enums import InvoiceStatus
 from app.models.invoice import Invoice
@@ -195,3 +195,40 @@ class InvoiceRepository(BaseRepository[Invoice]):
     def list_by_date_range(self, start: date, end: date) -> list[Invoice]:
         """Retourne les factures émises entre ``start`` et ``end`` (inclus)."""
         return self.filter(issue_date_from=start, issue_date_to=end)
+
+    # --- Optimistic locking (contrôle de concurrence) --------------------------
+
+    def update_cas(
+        self, invoice_id: int, expected_version: int, **fields: object
+    ) -> bool:
+        """Met à jour la facture (comparaison-et-échange) sur sa version.
+
+        Exécute un ``UPDATE invoices ... WHERE id = :id AND version =
+        :expected_version`` tout en incrémentant ``version``. Retourne
+        ``True`` si une ligne a été modifiée (version inchangée entre la
+        lecture et l'écriture), ``False`` si la facture a été modifiée par un
+        autre processus entre-temps.
+
+        ``expected_version`` doit être la version **lue** lors de la
+        récupération de la facture : si elle ne correspond plus, l'écriture
+        est refusée et l'appelant lève un ``ConcurrentModificationError``.
+
+        Note : comme le ``flush`` d'une entité modifie l'objet en session, ce
+        workload est réalisé par un UPDATE « bulk », sans expirer l'instance.
+        L'appelant doit ensuite rafraîchir l'objet s'il veut ses valeurs à jour.
+        """
+        result = self.session.execute(
+            update(Invoice)
+            .where(Invoice.id == invoice_id, Invoice.version == expected_version)
+            .values(
+                **{k: v for k, v in fields.items() if k != "version"},
+                version=Invoice.version + 1,
+            ),
+            execution_options={"synchronize_session": False},
+        )
+        return result.rowcount == 1
+
+    def current_version(self, invoice_id: int) -> int:
+        """Retourne la version courante persistée d'une facture."""
+        stmt = select(Invoice.version).where(Invoice.id == invoice_id)
+        return int(self.session.scalar(stmt) or 0)

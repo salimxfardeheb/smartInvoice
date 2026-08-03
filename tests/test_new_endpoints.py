@@ -416,7 +416,7 @@ class TestRetry:
             db.close()
 
         resp = client.post(f"/api/invoices/{invoice_id}/retry", headers=headers)
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code == 202, resp.text
 
         logs = client.get(f"/api/invoices/{invoice_id}/audit-logs", headers=headers).json()
         assert logs["items"][0]["action"] == AuditAction.REPROCESSED.value

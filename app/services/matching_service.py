@@ -37,6 +37,7 @@ from app.repositories import (
     InvoiceRepository,
     PurchaseOrderLineRepository,
     PurchaseOrderRepository,
+    SettingRepository,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - évite les imports circulaires à runtime
@@ -132,11 +133,21 @@ class MatchingService:
         self.purchase_orders = PurchaseOrderRepository(db)
         self.purchase_order_lines = PurchaseOrderLineRepository(db)
 
-        settings = get_settings()
-        self.quantity_tolerance = settings.matching_quantity_tolerance
-        self.price_tolerance = settings.matching_price_tolerance
-        self.amount_tolerance = settings.matching_amount_tolerance
-        self.tax_tolerance = settings.matching_tax_tolerance
+        # Tolérances effectives : un réglage stocké en base (table ``settings``)
+        # prime sur la configuration applicative, sans redéploiement.
+        repo = SettingRepository(db)
+        self.quantity_tolerance = repo.get_typed(
+            "matching_quantity_tolerance", get_settings().matching_quantity_tolerance
+        )
+        self.price_tolerance = repo.get_typed(
+            "matching_price_tolerance", get_settings().matching_price_tolerance
+        )
+        self.amount_tolerance = repo.get_typed(
+            "matching_amount_tolerance", get_settings().matching_amount_tolerance
+        )
+        self.tax_tolerance = repo.get_typed(
+            "matching_tax_tolerance", get_settings().matching_tax_tolerance
+        )
 
     # --- Orchestration ----------------------------------------------------------
 

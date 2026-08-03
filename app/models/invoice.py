@@ -36,6 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover - évite les imports circulaires à runtim
     from app.models.invoice_line import InvoiceLine
     from app.models.purchase_order import PurchaseOrder
     from app.models.supplier import Supplier
+    from app.models.task import Task
 
 # Portabilité : JSONB en production (PostgreSQL), JSON ailleurs (tests SQLite).
 JsonType = JSON().with_variant(JSONB(), "postgresql")
@@ -114,6 +115,13 @@ class Invoice(Base, TimestampMixin):
     is_duplicate: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # Optimistic locking : seuls les objets versionnés (factures) réalisent des
+    # transitions d'état concurrentes. Chaque écriture incrémente `version` via
+    # un update conditionnel (CAS) ; une lecture périmée provoque un
+    # `ConcurrentModificationError` au lieu d'un écrasement silencieux.
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
     supplier: Mapped[Supplier] = relationship(back_populates="invoices")
     purchase_order: Mapped[PurchaseOrder | None] = relationship(
@@ -135,6 +143,7 @@ class Invoice(Base, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    tasks: Mapped[list[Task]] = relationship(back_populates="invoice")
 
     @property
     def file_info(self) -> dict | None:

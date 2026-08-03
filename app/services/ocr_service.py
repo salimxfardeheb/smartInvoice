@@ -17,6 +17,7 @@ retourné (aucune exception n'est levée pour ces cas attendus).
 
 from __future__ import annotations
 
+import time
 from statistics import fmean
 
 from sqlalchemy.orm import Session
@@ -110,7 +111,12 @@ class OcrService:
     def _run(self, invoice: Invoice) -> tuple[OcrExtraction, float]:
         """Charge, reconnaît, nettoie et structure un document."""
         images = self.loader.load_images(invoice)
-        results = [self.engine.recognize(image) for image in images]
+        deadline = time.monotonic() + get_settings().ocr_pipeline_timeout_seconds
+        results = []
+        for image in images:
+            self._check_deadline(deadline)
+            results.append(self.engine.recognize(image))
+            self._check_deadline(deadline)
         texts, confidence = self._aggregate(results)
         if not texts:
             raise DocumentIllegibleError(
@@ -124,6 +130,15 @@ class OcrService:
             OcrExtraction(general=general, financial=financial, lines=items),
             confidence,
         )
+
+    @staticmethod
+    def _check_deadline(deadline: float) -> None:
+        """Lève OcrEngineError si le délai global du pipeline est dépassé."""
+        if time.monotonic() >= deadline:
+            raise OcrEngineError(
+                "Temps de traitement OCR maximal dépassé "
+                f"({get_settings().ocr_pipeline_timeout_seconds:.0f} s)."
+            )
 
     @staticmethod
     def _aggregate(results: list[OcrResult]) -> tuple[list[str], float]:

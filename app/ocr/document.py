@@ -43,10 +43,21 @@ class DocumentLoader:
         import pypdfium2 as pdfium
 
         dpi = get_settings().ocr_render_dpi
+        max_pages = get_settings().ocr_max_pages
         try:
             document = pdfium.PdfDocument(content)
         except Exception as exc:
             raise OcrEngineError("Impossible d'ouvrir le PDF pour l'analyse.") from exc
+
+        try:
+            page_count = len(document)
+        except TypeError:  # pragma: no cover - fakes/document exotiques sans __len__
+            page_count = None
+        if page_count is not None and page_count > max_pages:
+            document.close()
+            raise OcrEngineError(
+                f"Document trop volumineux ({page_count} pages, maximum {max_pages})."
+            )
 
         images: list[Image.Image] = []
         try:

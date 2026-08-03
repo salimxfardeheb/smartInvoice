@@ -11,7 +11,9 @@ from app.models.invoice_line import InvoiceLine
 from app.models.purchase_order import PurchaseOrder
 from app.models.purchase_order_line import PurchaseOrderLine
 from app.models.refresh_token import RefreshToken
+from app.models.setting import Setting
 from app.models.supplier import Supplier
+from app.models.task import Task
 from app.models.user import User
 
 __all__ = [
@@ -22,6 +24,8 @@ __all__ = [
     "PurchaseOrder",
     "PurchaseOrderLine",
     "RefreshToken",
+    "Setting",
     "Supplier",
+    "Task",
     "User",
 ]

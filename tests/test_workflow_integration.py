@@ -198,6 +198,21 @@ def _deposit(client, headers, supplier_id, *, number: str) -> dict:
     return response.json()
 
 
+def _process(client, headers, invoice_id: int) -> dict:
+    """Lance l'OCR (asynchrone, exécuté inline en test) puis retourne la facture.
+
+    Depuis la migration vers les tâches asynchrones, ``POST /process`` répond
+    202 avec un ``task_id`` ; en test l'exécuteur inline l'a déjà terminée.
+    On retourne l'état **à jour** de la facture (via ``GET``).
+    """
+    response = client.post(f"/api/invoices/{invoice_id}/process", headers=headers)
+    assert response.status_code == 202, response.text
+    assert response.json()["state"] == "réussi", response.text
+    invoice = client.get(f"/api/invoices/{invoice_id}", headers=headers)
+    assert invoice.status_code == 200, invoice.text
+    return invoice.json()
+
+
 class TestHappyPath:
     """Workflow nominal : dépôt → OCR → matching → validation → Vendor Bill."""
 
@@ -218,9 +233,7 @@ class TestHappyPath:
         holder["engine"] = FakeOcrEngine(
             texts=happy_texts(), scores=[0.95] * len(happy_texts())
         )
-        response = client.post(f"/api/invoices/{invoice_id}/process", headers=headers)
-        assert response.status_code == 200, response.text
-        processed = response.json()
+        processed = _process(client, headers, invoice_id)
         assert processed["status"] == InvoiceStatus.TO_REVIEW.value
         assert processed["extracted_data"]["general"]["purchase_order_reference"] == (
             HAPPY_PO_REFERENCE
@@ -278,10 +291,8 @@ class TestIllegibleDocument:
         invoice_id = invoice["id"]
 
         holder["engine"] = FakeOcrEngine(texts=[], scores=[])
-        response = client.post(f"/api/invoices/{invoice_id}/process", headers=headers)
+        body = _process(client, headers, invoice_id)
 
-        assert response.status_code == 200, response.text
-        body = response.json()
         assert body["status"] == InvoiceStatus.SYSTEM_ERROR.value
         assert body["error_message"] is not None
         assert "texte" in body["error_message"].lower()
@@ -325,9 +336,8 @@ class TestPurchaseOrderNotFound:
         holder["engine"] = FakeOcrEngine(
             texts=unknown_po_texts(), scores=[0.95] * len(unknown_po_texts())
         )
-        response = client.post(f"/api/invoices/{invoice_id}/process", headers=headers)
-        assert response.status_code == 200, response.text
-        assert response.json()["status"] == InvoiceStatus.TO_REVIEW.value
+        processed = _process(client, headers, invoice_id)
+        assert processed["status"] == InvoiceStatus.TO_REVIEW.value
 
         response = client.post(f"/api/invoices/{invoice_id}/match", headers=headers)
         assert response.status_code == 200, response.text
@@ -354,9 +364,8 @@ class TestDetectedGaps:
         holder["engine"] = FakeOcrEngine(
             texts=gaps_texts(), scores=[0.95] * len(gaps_texts())
         )
-        response = client.post(f"/api/invoices/{invoice_id}/process", headers=headers)
-        assert response.status_code == 200, response.text
-        assert response.json()["status"] == InvoiceStatus.TO_REVIEW.value
+        processed = _process(client, headers, invoice_id)
+        assert processed["status"] == InvoiceStatus.TO_REVIEW.value
 
         response = client.post(f"/api/invoices/{invoice_id}/match", headers=headers)
         assert response.status_code == 200, response.text
@@ -421,8 +430,7 @@ class TestDuplicate:
             "Total TTC  102,00 €",
         ]
         holder["engine"] = FakeOcrEngine(texts=texts, scores=[0.95] * len(texts))
-        response = client.post(f"/api/invoices/{invoice_id}/process", headers=headers)
-        assert response.status_code == 200, response.text
+        _process(client, headers, invoice_id)
 
         response = client.post(f"/api/invoices/{invoice_id}/match", headers=headers)
         assert response.status_code == 200, response.text
@@ -452,7 +460,7 @@ class TestVendorBillFailure:
         holder["engine"] = FakeOcrEngine(
             texts=happy_texts(), scores=[0.95] * len(happy_texts())
         )
-        client.post(f"/api/invoices/{invoice_id}/process", headers=headers)
+        _process(client, headers, invoice_id)
         client.post(f"/api/invoices/{invoice_id}/match", headers=headers)
         assert (
             client.post(f"/api/invoices/{invoice_id}/validate", headers=headers).status_code

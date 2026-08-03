@@ -7,13 +7,18 @@ consultation (métadonnées + fichier source) et transitions de statut.
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime
+from unicodedata import normalize
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
+    ConcurrentModificationError,
     DocumentNotFoundError,
     DuplicateInvoiceError,
+    InvalidInvoiceNumberError,
     InvalidStatusTransitionError,
     NotFoundError,
     SupplierNotFoundError,
@@ -65,6 +70,23 @@ class InvoiceService:
         self.suppliers = SupplierRepository(db)
         self.validator = DocumentValidator()
 
+    @staticmethod
+    def _sanitize_filename(filename: str) -> str:
+        """Ne garde que la base d'un nom de fichier (assainissement du chemin)."""
+        return os.path.basename(normalize("NFKC", filename)).strip()
+
+    @staticmethod
+    def _sanitize_invoice_number(value: str) -> str:
+        """Normalise un numéro de facture : sans espace superflu, taille bornée."""
+        value = normalize("NFKC", value).strip()
+        if not value:
+            raise InvalidInvoiceNumberError("Le numéro de facture est vide.")
+        if len(value) > 100:
+            raise InvalidInvoiceNumberError(
+                "Le numéro de facture est trop long (100 caractères max)."
+            )
+        return value
+
     # --- Dépôt --------------------------------------------------------------
 
     def deposit(
@@ -86,6 +108,8 @@ class InvoiceService:
         :class:`DuplicateInvoiceError` en cas de rejet.
         """
         suffix, mime_type = self.validator.validate(filename, content)
+        filename = self._sanitize_filename(filename)
+        invoice_number = self._sanitize_invoice_number(invoice_number)
 
         supplier = self.suppliers.get(supplier_id)
         if supplier is None:
@@ -109,6 +133,15 @@ class InvoiceService:
                 content_type=mime_type,
                 file_size=len(content),
             )
+        except IntegrityError as exc:
+            # Course sur le couple (fournisseur, numéro) : une autre requête a
+            # inséré la même facture entre le SELECT de contrôle et l'INSERT.
+            # La contrainte d'unicité lève → on traduit en doublon propre.
+            self.db.rollback()
+            raise DuplicateInvoiceError(
+                "Une facture portant le même numéro existe déjà pour ce "
+                "fournisseur."
+            ) from exc
         except Exception:
             self.storage.delete(file_path)
             raise
@@ -183,6 +216,11 @@ class InvoiceService:
 
         Le motif optionnel est conservé dans ``rejection_reason`` (rejet) ou
         ``error_message`` (erreur système).
+
+        La mise à jour est effectuée en **optimistic locking** (compare-and-swap
+        sur ``invoice.version``) : si une autre opération a modifié la facture
+        entre la lecture et l'écriture, :class:`ConcurrentModificationError`
+        est levée au lieu d'écraser silencieusement l'état concurrent.
         """
         allowed = VALID_TRANSITIONS.get(invoice.status, set())
         if new_status not in allowed:
@@ -191,9 +229,23 @@ class InvoiceService:
                 f"« {new_status.value} »."
             )
 
-        self.invoices.update(invoice, status=new_status)
+        updates: dict = {"status": new_status}
         if new_status is InvoiceStatus.REJECTED:
-            self.invoices.update(invoice, rejection_reason=reason)
-        if new_status is InvoiceStatus.SYSTEM_ERROR:
-            self.invoices.update(invoice, error_message=reason)
+            updates["rejection_reason"] = reason
+        elif new_status is InvoiceStatus.SYSTEM_ERROR:
+            updates["error_message"] = reason
+
+        expected_version = invoice.version
+        applied = self.invoices.update_cas(
+            invoice.id, expected_version, **updates
+        )
+        if not applied:
+            raise ConcurrentModificationError(
+                "La facture a été modifiée entre-temps ; merci de recharger."
+            )
+        # Ré-aligne l'objet en session (l'UPDATE bulk ne l'expire pas) afin que
+        # les attributs lus immédiatement après reflètent l'écriture.
+        for key, value in updates.items():
+            setattr(invoice, key, value)
+        invoice.version = expected_version + 1
         return invoice

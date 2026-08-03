@@ -111,13 +111,24 @@ def create_refresh_token(
 
 
 def decode_token(token: str) -> dict[str, Any]:
-    """Décode et valide un jeton JWT (signature + expiration)."""
+    """Décode et valide un jeton JWT (signature + expiration).
+
+    Accepte la clé principale ainsi que les clés héritées (rotation) définies
+    par ``jwt_legacy_secrets`` ; la clé principale reste celle utilisée pour
+    signer (``_encode``).
+    """
     settings = get_settings()
-    try:
-        return jwt.decode(
-            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
-        )
-    except jwt.ExpiredSignatureError as exc:
-        raise ExpiredTokenError("Le jeton a expiré.") from exc
-    except jwt.InvalidTokenError as exc:
-        raise InvalidTokenError("Jeton invalide.") from exc
+    secrets = [settings.jwt_secret_key, *settings.jwt_legacy_secret_list]
+    last_error: Exception | None = None
+    for secret in secrets:
+        try:
+            return jwt.decode(
+                token, secret, algorithms=[settings.jwt_algorithm]
+            )
+        except jwt.ExpiredSignatureError as exc:
+            raise ExpiredTokenError("Le jeton a expiré.") from exc
+        except jwt.InvalidTokenError as exc:  # noqa: PERF203 - essai des clés suivantes
+            last_error = exc
+    if isinstance(last_error, jwt.InvalidTokenError):
+        raise InvalidTokenError("Jeton invalide.") from last_error
+    raise InvalidTokenError("Jeton invalide.") from last_error

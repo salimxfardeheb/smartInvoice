@@ -14,7 +14,9 @@ from app.repositories.invoice_repository import InvoiceRepository
 from app.repositories.purchase_order_line_repository import PurchaseOrderLineRepository
 from app.repositories.purchase_order_repository import PurchaseOrderRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
+from app.repositories.setting_repository import SettingRepository
 from app.repositories.supplier_repository import SupplierRepository
+from app.repositories.task_repository import TaskRepository
 from app.repositories.user_repository import UserRepository
 
 __all__ = [
@@ -26,6 +28,8 @@ __all__ = [
     "PurchaseOrderLineRepository",
     "PurchaseOrderRepository",
     "RefreshTokenRepository",
+    "SettingRepository",
     "SupplierRepository",
+    "TaskRepository",
     "UserRepository",
 ]

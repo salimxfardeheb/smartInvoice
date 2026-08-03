@@ -85,6 +85,17 @@ def _deposit(client, headers, supplier_id, *, number: str = "FAC-OCR-API") -> in
 
 
 class TestProcess:
+    def _process(self, client, headers, invoice_id):
+        """Lance le process OCR (asynchrone in-line en test) et return la facture."""
+        response = client.post(f"/api/invoices/{invoice_id}/process", headers=headers)
+        assert response.status_code == 202, response.text
+        body = response.json()
+        assert body["state"] == "réussi", body
+        assert body["invoice_id"] == invoice_id
+        invoice = client.get(f"/api/invoices/{invoice_id}", headers=headers)
+        assert invoice.status_code == 200, invoice.text
+        return invoice.json(), body
+
     def test_process_success(self, ocr_client, engine) -> None:
         client, holder = ocr_client
         headers = _register_roles(client)["comptable"]
@@ -92,18 +103,12 @@ class TestProcess:
         invoice_id = _deposit(client, headers, supplier_id)
         holder["engine"] = fake_engine_ok()
 
-        response = client.post(
-            f"/api/invoices/{invoice_id}/process", headers=headers
-        )
+        invoice, task = self._process(client, headers, invoice_id)
 
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["invoice_id"] == invoice_id
-        assert body["status"] == InvoiceStatus.TO_REVIEW.value
-        assert body["ocr_confidence_score"] == pytest.approx(0.95, abs=1e-6)
-        assert body["error_message"] is None
-        assert body["extracted_data"]["general"]["invoice_number"] == "FAC-2026-001"
-        assert len(body["extracted_data"]["lines"]) == 3
+        assert invoice["status"] == InvoiceStatus.TO_REVIEW.value
+        assert invoice["ocr_confidence_score"] == pytest.approx(0.95, abs=1e-6)
+        assert invoice["extracted_data"]["general"]["invoice_number"] == "FAC-2026-001"
+        assert len(invoice["extracted_data"]["lines"]) == 3
 
     def test_process_illegible_document(self, ocr_client, engine) -> None:
         client, holder = ocr_client
@@ -112,14 +117,10 @@ class TestProcess:
         invoice_id = _deposit(client, headers, supplier_id)
         holder["engine"] = fake_engine_empty()
 
-        response = client.post(
-            f"/api/invoices/{invoice_id}/process", headers=headers
-        )
+        invoice, _ = self._process(client, headers, invoice_id)
 
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["status"] == InvoiceStatus.SYSTEM_ERROR.value
-        assert body["error_message"] is not None
+        assert invoice["status"] == InvoiceStatus.SYSTEM_ERROR.value
+        assert invoice["error_message"] is not None
 
     def test_process_missing_file(self, ocr_client, engine) -> None:
         client, holder = ocr_client
@@ -138,12 +139,9 @@ class TestProcess:
             session.close()
         holder["engine"] = fake_engine_ok()
 
-        response = client.post(
-            f"/api/invoices/{invoice_id}/process", headers=headers
-        )
+        invoice, _ = self._process(client, headers, invoice_id)
 
-        assert response.status_code == 200, response.text
-        assert response.json()["status"] == InvoiceStatus.SYSTEM_ERROR.value
+        assert invoice["status"] == InvoiceStatus.SYSTEM_ERROR.value
 
     def test_process_requires_authentication(self, ocr_client, engine) -> None:
         client, _ = ocr_client

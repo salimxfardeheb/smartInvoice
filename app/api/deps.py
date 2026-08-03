@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
     InvalidTokenError,
     PermissionDeniedError,
+    RateLimitExceededError,
     UserInactiveError,
 )
 from app.core.permissions import Permission, permissions_for
+from app.core.ratelimit import get_limiter
 from app.core.security import TOKEN_TYPE_ACCESS, decode_token
 from app.db.session import SessionLocal
 from app.models.enums import UserRole
@@ -22,6 +24,7 @@ from app.ocr.base import OcrEngine, get_ocr_engine
 from app.repositories import (
     AnomalyRepository,
     AuditLogRepository,
+    TaskRepository,
     UserRepository,
 )
 from app.services.auth_service import AuthService
@@ -31,6 +34,7 @@ from app.services.invoice_service import InvoiceService
 from app.services.matching_service import MatchingService
 from app.services.ocr_service import OcrService
 from app.services.odoo_service import OdooSyncService
+from app.services.task_manager import TaskManager, get_default_task_manager
 from app.services.validation_service import ValidationService
 from app.storage import get_storage
 from app.storage.base import Storage
@@ -168,6 +172,37 @@ def get_confirmation_service(db: Session = Depends(get_db)) -> BuyerConfirmation
     return BuyerConfirmationService(db)
 
 
-def get_config_service() -> ConfigService:
-    """Fabrique le service de configuration (sans état, partagé)."""
-    return ConfigService()
+def get_config_service(db: Session = Depends(get_db)) -> ConfigService:
+    """Fabrique le service de configuration lié à la session courante."""
+    return ConfigService(db)
+
+
+def get_task_manager(db: Session = Depends(get_db)) -> TaskManager:
+    """Fabrique le gestionnaire de tâches asynchrones (remplaçable en test)."""
+    return get_default_task_manager()
+
+
+def get_task_repository(db: Session = Depends(get_db)) -> TaskRepository:
+    """Fabrique le repository des tâches asynchrones lié à la session courante."""
+    return TaskRepository(db)
+
+
+def rate_limit(key_prefix: str) -> Callable[[Request], None]:
+    """Fabrique une dépendance de limitation (clé = adresse IP du client).
+
+    Si le rate limiting est désactivé (config), la dépendance ne fait rien.
+    Sélection : ``Depends(rate_limit("login"))``.
+    """
+
+    def dependency(request: Request) -> None:
+        limiter = get_limiter()
+        if limiter is None:
+            return
+        client = request.client.host if request.client else "unknown"
+        allowed, _, _ = limiter.allow(f"{key_prefix}:{client}")
+        if not allowed:
+            raise RateLimitExceededError(
+                "Trop de tentatives. Merci de réessayer plus tard."
+            )
+
+    return dependency

@@ -82,6 +82,10 @@ class InvalidDocumentError(SmartInvoiceError):
     """Document non supporté, corrompu ou illisible."""
 
 
+class InvalidInvoiceNumberError(InvalidDocumentError):
+    """Numéro de facture invalide (vide ou trop long)."""
+
+
 class DocumentIllegibleError(SmartInvoiceError):
     """Aucun texte exploitable n'a pu être extrait par l'OCR."""
 

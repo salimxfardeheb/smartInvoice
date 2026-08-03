@@ -87,12 +87,16 @@ def client(engine: Engine):
 
     La dépendance ``get_db`` de l'application est remplacée pour servir des
     sessions sur le moteur de test, avec commit à la fin de chaque requête
-    (même comportement que la production).
+    (même comportement que la production). ``get_task_manager`` est également
+    remplacé : les jobs asynchrones (OCR) s'exécutent **immédiatement** dans le
+    thread d'appel (exécuteur inline) sur le moteur de test, ce qui rend les
+    tests déterministes sans réels threads.
     """
     from fastapi.testclient import TestClient
 
-    from app.api.deps import get_db
+    from app.api.deps import get_db, get_task_manager
     from app.main import create_app
+    from app.services.task_manager import InlineExecutor, TaskManager
 
     app = create_app()
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -108,7 +112,13 @@ def client(engine: Engine):
         finally:
             db.close()
 
+    def override_get_task_manager() -> TaskManager:
+        return TaskManager(
+            session_factory=session_factory, executor=InlineExecutor()
+        )
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_task_manager] = override_get_task_manager
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

@@ -7,9 +7,21 @@ dans ``app.core.exceptions`` sont traduites ici en réponses HTTP.
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import anomalies, auth, catalog, config, invoices, odoo, users
+from app.api.routes import (
+    anomalies,
+    auth,
+    catalog,
+    config,
+    invoices,
+    metrics,
+    odoo,
+    tasks,
+    users,
+)
+from app.core.config import get_settings
 from app.core.exceptions import (
     AuthenticationError,
     ConflictError,
@@ -17,6 +29,7 @@ from app.core.exceptions import (
     NotFoundError,
     OdooError,
     PermissionDeniedError,
+    RateLimitExceededError,
     UserAlreadyExistsError,
 )
 
@@ -28,6 +41,16 @@ def create_app() -> FastAPI:
         description="OCR & rapprochement automatique des factures fournisseurs.",
         version="0.4.0",
     )
+
+    settings = get_settings()
+    if settings.cors_origin_list:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origin_list,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(users.router, prefix="/api/users", tags=["users"])
@@ -43,6 +66,8 @@ def create_app() -> FastAPI:
         prefix="/api/purchase-orders",
         tags=["purchase-orders"],
     )
+    app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
+    app.include_router(metrics.router, prefix="", tags=["monitoring"])
 
     @app.exception_handler(AuthenticationError)
     async def _handle_authentication(
@@ -55,6 +80,12 @@ def create_app() -> FastAPI:
         _request: Request, exc: PermissionDeniedError
     ) -> JSONResponse:
         return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+    @app.exception_handler(RateLimitExceededError)
+    async def _handle_rate_limit(
+        _request: Request, exc: RateLimitExceededError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=429, content={"detail": str(exc)})
 
     @app.exception_handler(NotFoundError)
     async def _handle_not_found(

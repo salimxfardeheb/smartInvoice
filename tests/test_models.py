@@ -35,6 +35,8 @@ EXPECTED_TABLES = {
     "anomalies",
     "audit_logs",
     "refresh_tokens",
+    "tasks",
+    "settings",
 }
 
 

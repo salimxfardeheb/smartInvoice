@@ -8,7 +8,12 @@ from fastapi import APIRouter, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_auth_service, get_current_user, get_db
+from app.api.deps import (
+    get_auth_service,
+    get_current_user,
+    get_db,
+    rate_limit,
+)
 from app.models.user import User
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -44,6 +49,7 @@ def register(payload: UserCreate, service: AuthServiceDep) -> TokenPair:
 def login(
     form: Annotated[OAuth2PasswordRequestForm, Depends()],
     service: AuthServiceDep,
+    _: None = Depends(rate_limit("login")),
 ) -> TokenPair:
     """Authentifie par nom d'utilisateur ou email + mot de passe."""
     user = service.authenticate(username=form.username, password=form.password)
@@ -55,7 +61,11 @@ def login(
     response_model=TokenPair,
     summary="Rafraîchir l'access token (rotation du refresh token)",
 )
-def refresh(payload: RefreshRequest, service: AuthServiceDep) -> TokenPair:
+def refresh(
+    payload: RefreshRequest,
+    service: AuthServiceDep,
+    _: None = Depends(rate_limit("refresh")),
+) -> TokenPair:
     """Échange un refresh token valide contre une nouvelle paire de jetons."""
     return service.refresh(payload.refresh_token)
 

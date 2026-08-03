@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401
 from app.db.base import Base
 
-HEAD = "0006_add_audit_actions"
+HEAD = "0007_tasks_settings_version"
 
 EXPECTED_TABLES = {
     "users",
@@ -24,6 +24,8 @@ EXPECTED_TABLES = {
     "anomalies",
     "audit_logs",
     "refresh_tokens",
+    "tasks",
+    "settings",
 }
 
 
