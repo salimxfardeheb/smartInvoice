@@ -55,6 +55,21 @@ class InvoiceListResponse(BaseModel):
     total: int
 
 
+class BatchDepositResult(BaseModel):
+    """Résultat du dépôt d'un fichier dans un lot (succès ou erreur)."""
+
+    filename: str
+    invoice: InvoiceRead | None = None
+    error: str | None = None
+
+
+class BatchDepositResponse(BaseModel):
+    """Résultat paginé du dépôt multi-fichiers (traitement par lot)."""
+
+    items: list[BatchDepositResult]
+    total: int
+
+
 class InvoiceStatusUpdate(BaseModel):
     """Transition de statut demandée via l'API."""
 

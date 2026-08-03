@@ -55,3 +55,13 @@ class SupplierRepository(BaseRepository[Supplier]):
             .limit(limit)
         )
         return list(self.session.scalars(stmt))
+
+    def count_by_name(self, name: str, *, active_only: bool = True) -> int:
+        """Compte les fournisseurs correspondant à la recherche par nom."""
+        from sqlalchemy import func
+
+        pattern = f"%{name}%"
+        stmt = select(func.count(Supplier.id)).where(Supplier.name.ilike(pattern))
+        if active_only:
+            stmt = stmt.where(Supplier.is_active.is_(True))
+        return int(self.session.scalar(stmt) or 0)

@@ -58,6 +58,14 @@ class ConflictError(SmartInvoiceError):
     """Conflit avec l'état actuel de la ressource."""
 
 
+class RateLimitExceededError(SmartInvoiceError):
+    """Trop de tentatives dans la fenêtre (brute force)."""
+
+
+class ConcurrentModificationError(ConflictError):
+    """La ressource a été modifiée entre la lecture et l'écriture (optimistic lock)."""
+
+
 class DuplicateInvoiceError(ConflictError):
     """Une facture identique (fournisseur + numéro) existe déjà."""
 

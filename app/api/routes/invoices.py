@@ -16,26 +16,42 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from app.api.deps import (
     get_anomaly_repository,
     get_audit_log_repository,
+    get_confirmation_service,
     get_invoice_service,
     get_matching_service,
     get_ocr_service,
     get_validation_service,
     require_permissions,
 )
-from app.core.exceptions import DocumentNotFoundError
+from app.core.exceptions import (
+    DocumentNotFoundError,
+    InvalidStatusTransitionError,
+    NotFoundError,
+    SmartInvoiceError,
+)
 from app.core.permissions import Permission
-from app.models.enums import InvoiceStatus
+from app.models.enums import AuditAction, InvoiceStatus
 from app.models.user import User
 from app.repositories import AnomalyRepository, AuditLogRepository
-from app.schemas.invoice import InvoiceListResponse, InvoiceRead, InvoiceStatusUpdate
+from app.schemas.invoice import (
+    BatchDepositResponse,
+    BatchDepositResult,
+    InvoiceListResponse,
+    InvoiceRead,
+    InvoiceStatusUpdate,
+)
 from app.schemas.matching import MatchingAnomalyRead, MatchingLineRead, MatchingRead
 from app.schemas.ocr import OcrResultRead
+from app.schemas.anomaly import AnomalyRead
 from app.schemas.summary import DashboardSummary, PendingAnomaly
 from app.schemas.validation import (
+    AuditLogListResponse,
     AuditLogRead,
+    InvoiceConfirm,
     InvoiceCorrection,
     InvoiceReject,
 )
+from app.services.confirmation_service import BuyerConfirmationService
 from app.services.invoice_service import InvoiceService
 from app.services.matching_service import MatchingService
 from app.services.ocr_service import OcrService
@@ -47,6 +63,9 @@ InvoiceServiceDep = Annotated[InvoiceService, Depends(get_invoice_service)]
 OcrServiceDep = Annotated[OcrService, Depends(get_ocr_service)]
 MatchingServiceDep = Annotated[MatchingService, Depends(get_matching_service)]
 ValidationServiceDep = Annotated[ValidationService, Depends(get_validation_service)]
+ConfirmationServiceDep = Annotated[
+    BuyerConfirmationService, Depends(get_confirmation_service)
+]
 AuditLogRepoDep = Annotated[AuditLogRepository, Depends(get_audit_log_repository)]
 AnomalyRepoDep = Annotated[AnomalyRepository, Depends(get_anomaly_repository)]
 InvoiceReadPerm = Annotated[
@@ -57,6 +76,9 @@ InvoiceDepositPerm = Annotated[
 ]
 InvoiceValidatePerm = Annotated[
     object, Depends(require_permissions(Permission.INVOICE_VALIDATE))
+]
+InvoiceConfirmPerm = Annotated[
+    object, Depends(require_permissions(Permission.INVOICE_CONFIRM))
 ]
 
 
@@ -93,6 +115,48 @@ def deposit_invoice(
         supplier_id=supplier_id,
         issue_date=issue_date,
     )
+
+
+@router.post(
+    "/batch",
+    response_model=BatchDepositResponse,
+    status_code=201,
+    summary="Déposer plusieurs factures d'un coup (traitement par lot)",
+)
+def deposit_batch(
+    files: Annotated[list[UploadFile], File(description="Documents à déposer")],
+    invoice_numbers: Annotated[list[str], Form(description="Numéros (un par fichier)")],
+    supplier_ids: Annotated[list[int], Form(description="Fournisseurs (un par fichier)")],
+    service: InvoiceServiceDep = None,
+    _: InvoiceDepositPerm = None,
+) -> BatchDepositResponse:
+    """Dépose un lot de factures (un fichier = une facture).
+
+    ``invoice_numbers`` et ``supplier_ids`` doivent avoir la même longueur que
+    ``files`` (le fichier *i* est déposé avec le numéro *i* et le fournisseur
+    *i*). Chaque fichier est traité indépendamment : un échec (doublon,
+    document illisible, fournisseur inconnu) ne bloque pas les autres.
+    """
+    if len(files) != len(invoice_numbers) or len(files) != len(supplier_ids):
+        raise InvalidStatusTransitionError(
+            "files, invoice_numbers et supplier_ids doivent avoir la même longueur."
+        )
+
+    results: list[BatchDepositResult] = []
+    for index, file in enumerate(files):
+        try:
+            invoice = service.deposit(
+                filename=file.filename or f"document-{index + 1}",
+                content=file.file.read(),
+                invoice_number=invoice_numbers[index],
+                supplier_id=supplier_ids[index],
+            )
+            results.append(BatchDepositResult(filename=file.filename or "", invoice=invoice))
+        except SmartInvoiceError as exc:
+            results.append(
+                BatchDepositResult(filename=file.filename or "", error=str(exc))
+            )
+    return BatchDepositResponse(items=results, total=len(results))
 
 
 @router.get(
@@ -376,15 +440,124 @@ def create_vendor_bill(
 
 @router.get(
     "/{invoice_id}/audit-logs",
-    response_model=list[AuditLogRead],
-    summary="Journal d'audit d'une facture",
+    response_model=AuditLogListResponse,
+    summary="Journal d'audit d'une facture (paginé)",
 )
 def list_audit_logs(
     invoice_id: int,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     service: InvoiceServiceDep = None,
     audit_logs: AuditLogRepoDep = None,
     _: object = Depends(require_permissions(Permission.JOURNAL_READ)),
-) -> list[AuditLogRead]:
-    """Retourne l'historique des actions (qui, quand, quoi) sur une facture."""
+) -> AuditLogListResponse:
+    """Retourne le journal d'audit d'une facture, paginé (plus récentes d'abord)."""
     service.get_invoice(invoice_id)  # 404 si la facture n'existe pas
-    return audit_logs.list_by_invoice(invoice_id)
+    items = audit_logs.list_by_invoice_paginated(invoice_id, limit=limit, offset=offset)
+    total = audit_logs.count_by_invoice(invoice_id)
+    return AuditLogListResponse(items=[AuditLogRead.model_validate(log) for log in items], total=total)
+
+
+@router.post(
+    "/{invoice_id}/confirm",
+    response_model=InvoiceRead,
+    summary="Confirmer les quantités/produits d'une facture (acheteur)",
+)
+def confirm_invoice(
+    invoice_id: int,
+    payload: InvoiceConfirm,
+    service: InvoiceServiceDep = None,
+    confirmation: ConfirmationServiceDep = None,
+    user: User = Depends(require_permissions(Permission.INVOICE_CONFIRM)),
+) -> object:
+    """L'acheteur confirme (et éventuellement corrige) les quantités/produits.
+
+    Les valeurs fournies écrasent celles des lignes concernées et les
+    anomalies confirmables (quantité, produit absent, prix) encore ouvertes
+    sont marquées résolues. L'action est tracée dans le journal d'audit.
+    """
+    invoice = service.get_invoice(invoice_id)
+    return confirmation.confirm(invoice, user, payload)
+
+
+@router.post(
+    "/{invoice_id}/retry",
+    response_model=OcrResultRead,
+    summary="Ré-analyser une facture en « Erreur système »",
+)
+def retry_invoice(
+    invoice_id: int,
+    service: InvoiceServiceDep = None,
+    ocr: OcrServiceDep = None,
+    audit_logs: AuditLogRepoDep = None,
+    user: User = Depends(require_permissions(Permission.INVOICE_DEPOSIT)),
+) -> OcrResultRead:
+    """Relance le pipeline OCR d'une facture « Erreur système ».
+
+    Exige l'état « Erreur système » (409 sinon) et trace une entrée d'audit
+    ``re_analyse`` précisant le contexte (statut avant relance, message
+    d'erreur précédent) avant de relancer l'analyse.
+    """
+    invoice = service.get_invoice(invoice_id)
+    if invoice.status is not InvoiceStatus.SYSTEM_ERROR:
+        raise InvalidStatusTransitionError(
+            "Seules les factures « Erreur système » peuvent être relancées "
+            f"(état actuel : « {invoice.status.value} »)."
+        )
+    audit_logs.create(
+        invoice_id=invoice.id,
+        user_id=user.id,
+        action=AuditAction.REPROCESSED,
+        message="Ré-analyse demandée pour une facture en erreur système.",
+        details={
+            "previous_status": invoice.status.value,
+            "previous_error": invoice.error_message,
+        },
+    )
+    ocr.process(invoice)
+    return OcrResultRead(
+        invoice_id=invoice.id,
+        status=invoice.status,
+        ocr_confidence_score=invoice.ocr_confidence_score,
+        error_message=invoice.error_message,
+        extracted_data=invoice.extracted_data,
+    )
+
+
+@router.post(
+    "/{invoice_id}/anomalies/{anomaly_id}/resolve",
+    response_model=AnomalyRead,
+    summary="Résoudre une anomalie d'une facture",
+)
+def resolve_invoice_anomaly(
+    invoice_id: int,
+    anomaly_id: int,
+    service: InvoiceServiceDep = None,
+    anomalies: AnomalyRepoDep = None,
+    _: InvoiceValidatePerm = None,
+) -> AnomalyRead:
+    """Marque comme résolue une anomalie appartenant à la facture donnée."""
+    service.get_invoice(invoice_id)  # 404 si la facture n'existe pas
+    anomaly = anomalies.get(anomaly_id)
+    if anomaly is None or anomaly.invoice_id != invoice_id:
+        raise NotFoundError("Anomalie introuvable pour cette facture.")
+    return _anomaly_to_read(anomalies.resolve(anomaly))
+
+
+def _anomaly_to_read(anomaly) -> AnomalyRead:
+    """Schéma de sortie d'une anomalie (contexte facture/fournisseur)."""
+    invoice = anomaly.invoice
+    return AnomalyRead(
+        id=anomaly.id,
+        invoice_id=anomaly.invoice_id,
+        invoice_number=invoice.invoice_number,
+        supplier_name=invoice.supplier.name if invoice.supplier else None,
+        category=anomaly.category,
+        severity=anomaly.severity,
+        message=anomaly.message,
+        expected_value=anomaly.expected_value,
+        actual_value=anomaly.actual_value,
+        resolved=anomaly.resolved,
+        resolved_at=anomaly.resolved_at,
+        created_at=anomaly.created_at,
+    )

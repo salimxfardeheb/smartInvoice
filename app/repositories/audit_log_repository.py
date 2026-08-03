@@ -43,6 +43,34 @@ class AuditLogRepository(BaseRepository[AuditLog]):
         )
         return list(self.session.scalars(stmt))
 
+    def list_by_invoice_paginated(
+        self, invoice_id: int, *, limit: int = 100, offset: int = 0
+    ) -> list[AuditLog]:
+        """Retourne une page du journal d'audit d'une facture (plus récentes d'abord).
+
+        Permet de paginer un journal potentiellement volumineux
+        (``limit``/``offset``) au lieu de renvoyer la liste complète.
+        """
+        stmt = (
+            select(AuditLog)
+            .where(AuditLog.invoice_id == invoice_id)
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(self.session.scalars(stmt))
+
+    def count_by_invoice(self, invoice_id: int) -> int:
+        """Compte les entrées d'audit d'une facture."""
+        from sqlalchemy import func
+
+        stmt = (
+            select(func.count(AuditLog.id))
+            .select_from(AuditLog)
+            .where(AuditLog.invoice_id == invoice_id)
+        )
+        return int(self.session.scalar(stmt) or 0)
+
     def list_recent(self, *, limit: int = 100) -> list[AuditLog]:
         """Retourne les dernières entrées du journal (toutes factures)."""
         stmt = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)

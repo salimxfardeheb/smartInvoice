@@ -25,9 +25,12 @@ from app.repositories import (
     UserRepository,
 )
 from app.services.auth_service import AuthService
+from app.services.config_service import ConfigService
+from app.services.confirmation_service import BuyerConfirmationService
 from app.services.invoice_service import InvoiceService
 from app.services.matching_service import MatchingService
 from app.services.ocr_service import OcrService
+from app.services.odoo_service import OdooSyncService
 from app.services.validation_service import ValidationService
 from app.storage import get_storage
 from app.storage.base import Storage
@@ -153,3 +156,18 @@ def get_anomaly_repository(
 ) -> AnomalyRepository:
     """Fabrique le repository des anomalies lié à la session courante."""
     return AnomalyRepository(db)
+
+
+def get_odoo_sync_service(db: Session = Depends(get_db)) -> OdooSyncService:
+    """Fabrique le service de synchronisation Odoo lié à la session courante."""
+    return OdooSyncService(db)
+
+
+def get_confirmation_service(db: Session = Depends(get_db)) -> BuyerConfirmationService:
+    """Fabrique le service de confirmation acheteur lié à la session courante."""
+    return BuyerConfirmationService(db)
+
+
+def get_config_service() -> ConfigService:
+    """Fabrique le service de configuration (sans état, partagé)."""
+    return ConfigService()

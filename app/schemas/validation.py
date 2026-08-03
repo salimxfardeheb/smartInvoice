@@ -20,6 +20,30 @@ class InvoiceReject(BaseModel):
     reason: str = Field(min_length=1, max_length=1000, description="Motif du rejet")
 
 
+class InvoiceLineConfirm(BaseModel):
+    """Confirmation d'une ligne de facture par l'acheteur (quantité/produit)."""
+
+    line_number: int = Field(ge=1, description="Position de la ligne dans la facture")
+    confirmed: bool = Field(
+        default=True, description="Confirme la ligne telle qu'elle est libérée"
+    )
+    quantity: Decimal | None = Field(
+        default=None, description="Quantité confirmée (écrase la valeur extraite)"
+    )
+    unit_price: Decimal | None = Field(
+        default=None, description="Prix unitaire confirmé (écrase la valeur extraite)"
+    )
+    product_ref: str | None = Field(
+        default=None, max_length=100, description="Référence produit confirmée"
+    )
+
+
+class InvoiceConfirm(BaseModel):
+    """Confirmation des quantités/produits d'une facture par l'acheteur."""
+
+    lines: list[InvoiceLineConfirm] = Field(default_factory=list)
+
+
 class InvoiceLineCorrection(BaseModel):
     """Correction d'une ligne de facture (remplacement complet de la ligne)."""
 
@@ -76,3 +100,10 @@ class AuditLogRead(BaseModel):
     details: dict | None = None
     user: AuditUserBrief | None = None
     created_at: datetime
+
+
+class AuditLogListResponse(BaseModel):
+    """Résultat paginé du journal d'audit d'une facture."""
+
+    items: list[AuditLogRead]
+    total: int

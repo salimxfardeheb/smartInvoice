@@ -252,7 +252,7 @@ class TestHappyPath:
         # 6. Le journal d'audit trace validation + création de la Vendor Bill.
         response = client.get(f"/api/invoices/{invoice_id}/audit-logs", headers=headers)
         assert response.status_code == 200, response.text
-        actions = [entry["action"] for entry in response.json()]
+        actions = [entry["action"] for entry in response.json()["items"]]
         assert actions == ["vendor_bill_créée", "validation"]
 
         # 7. Les lignes de l'account.move sont construites depuis la facture.

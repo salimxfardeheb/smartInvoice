@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     ocr_lang: str = "fr"
     ocr_render_dpi: int = 200
     ocr_confidence_threshold: float = 0.6
+    # Limites de robustesse (PPTX / timeout global du pipeline).
+    ocr_max_pages: int = 50
+    ocr_pipeline_timeout_seconds: float = 300.0
 
     # Odoo (phase 5) : connexion XML-RPC au serveur de production.
     # Laisser les champs vides désactive la synchronisation (le service lève
@@ -69,6 +72,20 @@ class Settings(BaseSettings):
     matching_amount_tolerance: float = 0.02
     matching_tax_tolerance: float = 0.02
 
+    # Sécurité / infrastructure
+    # --- CORS (liste d'origines séparées par des virgules ; vide = désactivé)
+    cors_origins: str = ""
+    # --- Rotation des secrets : clés encore acceptées en décodage (transition)
+    jwt_legacy_secrets: str = ""
+
+    # --- Rate limiting de l'authentification (brute force)
+    rate_limit_enabled: bool = False
+    rate_limit_max: int = 20
+    rate_limit_window_seconds: int = 60
+
+    # --- File asynchrone des jobs OCR
+    task_queue_workers: int = 2
+
     @model_validator(mode="after")
     def _reject_default_secret_in_production(self) -> Settings:
         """Refuse la clé JWT par défaut en production."""
@@ -80,6 +97,16 @@ class Settings(BaseSettings):
                 "jwt_secret_key ne doit pas être la valeur par défaut en production."
             )
         return self
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """Origines CORS autorisées (séparées par des virgules)."""
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def jwt_legacy_secret_list(self) -> list[str]:
+        """Clés (anciennes) encore valides en décodage, hors clé principale."""
+        return [s.strip() for s in self.jwt_legacy_secrets.split(",") if s.strip()]
 
 
 @lru_cache

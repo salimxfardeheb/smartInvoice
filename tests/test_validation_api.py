@@ -107,7 +107,7 @@ class TestValidate:
 
         logs = client.get(f"/api/invoices/{invoice_id}/audit-logs", headers=headers)
         assert logs.status_code == 200
-        assert logs.json()[0]["action"] == "validation"
+        assert logs.json()["items"][0]["action"] == "validation"
 
     def test_validate_requires_validated_state(self, validation_client, engine) -> None:
         client, _ = validation_client
@@ -206,7 +206,8 @@ class TestCorrect:
 
         details = client.get(f"/api/invoices/{invoice_id}/audit-logs", headers=headers)
         assert details.status_code == 200
-        assert details.json()[0]["action"] == "correction"
+        assert details.json()["items"][0]["action"] == "correction"
+        assert details.json()["total"] == 1
 
     def test_correct_requires_correct_permission(self, validation_client, engine) -> None:
         client, _ = validation_client
@@ -280,10 +281,12 @@ class TestAuditLogs:
         response = client.get(f"/api/invoices/{invoice_id}/audit-logs", headers=headers)
 
         assert response.status_code == 200, response.text
-        actions = [entry["action"] for entry in response.json()]
+        body = response.json()
+        actions = [entry["action"] for entry in body["items"]]
         assert actions == ["validation", "correction"]
-        assert response.json()[0]["message"].startswith("Facture validée")
-        assert response.json()[0]["user"]["username"] == "comptable"
+        assert body["total"] == 2
+        assert body["items"][0]["message"].startswith("Facture validée")
+        assert body["items"][0]["user"]["username"] == "comptable"
 
     def test_audit_logs_require_journal_permission(self, validation_client, engine) -> None:
         client, _ = validation_client

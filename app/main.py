@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.routes import auth, invoices, users
+from app.api.routes import anomalies, auth, catalog, config, invoices, odoo, users
 from app.core.exceptions import (
     AuthenticationError,
     ConflictError,
@@ -32,6 +32,17 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(users.router, prefix="/api/users", tags=["users"])
     app.include_router(invoices.router, prefix="/api/invoices", tags=["invoices"])
+    app.include_router(anomalies.router, prefix="/api/anomalies", tags=["anomalies"])
+    app.include_router(odoo.router, prefix="/api/odoo/sync", tags=["odoo-sync"])
+    app.include_router(config.router, prefix="/api/config", tags=["config"])
+    app.include_router(
+        catalog.suppliers_router, prefix="/api/suppliers", tags=["suppliers"]
+    )
+    app.include_router(
+        catalog.purchase_orders_router,
+        prefix="/api/purchase-orders",
+        tags=["purchase-orders"],
+    )
 
     @app.exception_handler(AuthenticationError)
     async def _handle_authentication(

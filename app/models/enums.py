@@ -76,3 +76,20 @@ class AuditAction(str, enum.Enum):
     CORRECTED = "correction"
     REJECTED = "rejet"
     VENDOR_BILL_CREATED = "vendor_bill_créée"
+    CONFIRMED = "confirmation_acheteur"  # confirmation quantités/produits (Acheteur)
+    REPROCESSED = "re_analyse"  # relance d'une facture en « Erreur système »
+
+
+class TaskState(str, enum.Enum):
+    """État d'un job asynchrone (file d'attente des tâches)."""
+
+    PENDING = "en attente"
+    RUNNING = "en cours"
+    SUCCEEDED = "réussi"
+    FAILED = "échoué"
+
+
+class TaskKind(str, enum.Enum):
+    """Type de job asynchrone."""
+
+    OCR = "ocr"
