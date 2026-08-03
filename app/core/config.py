@@ -48,7 +48,9 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 20
 
     # OCR (phase 4)
+    ocr_engine: str = "paddle"  # moteur OCR : "paddle" ou "tesseract"
     ocr_lang: str = "fr"
+    ocr_tesseract_lang: str = "fra"  # langue Tesseract (ex. "fra", "eng", "fra+eng")
     ocr_render_dpi: int = 200
     ocr_confidence_threshold: float = 0.6
     # Limites de robustesse (PPTX / timeout global du pipeline).

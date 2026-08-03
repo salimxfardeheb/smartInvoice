@@ -51,7 +51,7 @@ Création Vendor Bill (account.move Odoo)
 | **Authentification** | JWT access (30 min) + refresh tokens avec rotation et révocation (stockés hachés), hash bcrypt, changement de mot de passe, premier compte → Administrateur. |
 | **Gestion des utilisateurs** | CRUD, rôles (Comptable / Acheteur / Administrateur), activation/désactivation, matrice de permissions centralisée. |
 | **Dépôt de factures** | Upload PDF, JPG, JPEG, PNG — validation par *magic bytes* + ouverture réelle du fichier (anti-corruption), anti-doublon (fournisseur + numéro), limite de taille configurable. |
-| **OCR** | Pipeline complet : rendu PDF page à page (pypdfium2) → PaddleOCR → nettoyage → extraction (champs généraux, financiers, lignes) → score de confiance. |
+| **OCR** | Pipeline complet : rendu PDF page à page (pypdfium2) → moteur OCR (PaddleOCR par défaut, Tesseract en second moteur, sélecteur via `OCR_ENGINE`) → nettoyage → extraction (champs généraux, financiers, lignes) → score global + confiance par champ. Pages annexes détectées et conservées comme preuves (images rendues + boîtes englobantes dans `extracted_data`). |
 | **Intégration Odoo** | Client XML-RPC (timeout, traduction des erreurs), synchronisation en cache local : `res.partner` → fournisseurs, `purchase.order` → BC, `purchase.order.line` → lignes BC. |
 | **Matching** | Rapprochement facture ↔ BC : fournisseur, lignes (produit/référence/nom flou via difflib), quantités, prix unitaires, montants HT/TTC, TVA. Score global pondéré (0..1) persisté. |
 | **Anomalies** | Catégories : montant, TVA, quantité, produit absent, doublon, fournisseur, bon de commande, autre. Sévérités info/warning/critical. |
@@ -104,13 +104,16 @@ smartInvoice/
 │   │   ├── validation_service.py # Validation, rejet, correction, Vendor Bill
 │   │   └── auth_service.py       # Auth, comptes, jetons
 │   ├── ocr/
-│   │   ├── base.py               # Contrat OcrEngine + fabrique
-│   │   ├── paddle.py             # Moteur PaddleOCR
+│   │   ├── base.py               # Contrat OcrEngine + fabrique (sélecteur)
+│   │   ├── paddle.py             # Moteur PaddleOCR (par défaut)
+│   │   ├── tesseract.py          # Moteur Tesseract (second moteur, psm 6)
+│   │   ├── pages.py              # Détection des pages annexes
+│   │   ├── confidence.py         # Confiance par champ (politique)
 │   │   ├── document.py           # Chargement PDF/image → images
 │   │   ├── cleaners.py           # Normalisation texte, montants, dates, devises
 │   │   ├── extractor.py          # Extraction des champs généraux/financiers
 │   │   ├── lines.py              # Parsing des lignes de facture
-│   │   └── schema.py             # Schémas d'extraction OCR
+│   │   └── schema.py             # Schémas d'extraction OCR (+ layout/preuves)
 │   ├── odoo/
 │   │   └── client.py             # Client XML-RPC Odoo
 │   └── storage/
@@ -253,7 +256,9 @@ STORAGE_ROOT=storage
 MAX_UPLOAD_SIZE_MB=20
 
 # --- OCR ---
+OCR_ENGINE=paddle
 OCR_LANG=fr
+OCR_TESSERACT_LANG=fra
 OCR_RENDER_DPI=200
 OCR_CONFIDENCE_THRESHOLD=0.6
 

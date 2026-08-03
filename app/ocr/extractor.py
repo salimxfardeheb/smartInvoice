@@ -22,6 +22,10 @@ _INVOICE_NUMBER_LABELS = (
     "no facture",
     "facture n",
     "invoice number",
+    "invoice number #",
+    "invoice nr",
+    "invoice n",
+    "bill number",
     "invoice no",
     "invoice #",
     "n°",
@@ -40,14 +44,20 @@ _DUE_DATE_LABELS = (
     "échéance",
     "echeance",
     "due date",
-    "date limite",
     "payment due",
+    "payment due date",
+    "date limite",
+    "date d'échéance",
+    "date d'echeance",
 )
 _PO_LABELS = (
     "bon de commande",
     "numéro de commande",
     "numero de commande",
     "purchase order",
+    "order number",
+    "reference po",
+    "po reference",
     "commande n",
     "n° bc",
     "no bc",
@@ -101,6 +111,22 @@ _SHIPPING_LABELS = (
     "shipping",
     "transport",
 )
+
+# Association champ → libellés, partagée avec la politique de confiance.
+FIELD_LABELS: dict[str, tuple[str, ...]] = {
+    "invoice_number": _INVOICE_NUMBER_LABELS,
+    "issue_date": _ISSUE_DATE_LABELS,
+    "due_date": _DUE_DATE_LABELS,
+    "purchase_order_reference": _PO_LABELS,
+    "supplier_reference": _SUPPLIER_REF_LABELS,
+    "currency": (),
+    "supplier_name": _SUPPLIER_LABELS,
+    "total_excl_tax": _TOTAL_HT_LABELS,
+    "tax_amount": _TAX_LABELS,
+    "total_incl_tax": _TOTAL_TTC_LABELS,
+    "discount": _DISCOUNT_LABELS,
+    "shipping_fees": _SHIPPING_LABELS,
+}
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z]{0,6}[-_\s/]?\d{2,}[A-Za-z0-9\-_/.]*")
 _DATE_IN_TEXT_RE = re.compile(

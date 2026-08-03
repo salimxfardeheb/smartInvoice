@@ -46,6 +46,10 @@ _AMOUNT_CANDIDATE_RE = re.compile(
     r"\)?(?!(?:\s*%|[A-Za-z0-9]|[./\-−]\d))"
 )
 
+# Magnitude maximale d'un montant « plausible » : au-delà, la valeur est
+# considérée comme du bruit OCR (numéro de téléphone, identifiant, etc.).
+_MAX_AMOUNT = Decimal("1000000000000.00")
+
 
 def normalize_amount(raw: str) -> Decimal | None:
     """Normalise un montant OCR en ``Decimal``, ou ``None`` si illisible.
@@ -86,7 +90,10 @@ def normalize_amount(raw: str) -> Decimal | None:
     except InvalidOperation:
         return None
 
-    return -value if negative else value
+    value = -value if negative else value
+    if abs(value) > _MAX_AMOUNT:
+        return None
+    return value
 
 
 def _parse_with_separator(s: str, sep: str) -> Decimal:

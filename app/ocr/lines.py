@@ -116,19 +116,31 @@ _UNITS = (
 
 _PERCENT_RE = re.compile(r"(\d{1,3}(?:[,.]\d{1,2})?)\s*%")
 _PRODUCT_REF_RE = re.compile(r"^([A-Za-z]{1,6}[-_/]\d{2,}[A-Za-z0-9\-_/]*)\b")
+# Date « JJ/MM/AAAA » : une ligne qui n'est qu'une date n'est pas un article.
+_DATE_LINE_RE = re.compile(r"^\s*\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\s*$")
+# Numéro de téléphone / identifiant long non décimal : pas un article.
+_PHONE_LINE_RE = re.compile(r"^\s*\+?\d[\d\s.-]{8,}\s*$")
 
 
 class InvoiceLineParser:
     """Parse les lignes de facture depuis les lignes de texte OCR."""
 
-    def parse(self, lines: list[str]) -> list[OcrLineItem]:
-        """Retourne les lignes de facture reconnues (numérotées à partir de 1)."""
+    def parse(
+        self, lines: list[str], scores: list[float] | None = None
+    ) -> list[OcrLineItem]:
+        """Retourne les lignes de facture reconnues (numérotées à partir de 1).
+
+        ``scores`` (optionnel) associe une confiance OCR à chaque texte de
+        ``lines`` (même ordre) ; elle est reportée sur la ligne reconnue.
+        """
         items: list[OcrLineItem] = []
-        for line in lines:
+        for i, line in enumerate(lines):
             if not self._is_item_line(line):
                 continue
             item = self._parse_line(line, len(items) + 1)
             if item is not None:
+                if scores is not None and i < len(scores):
+                    item.confidence = scores[i]
                 items.append(item)
         return items
 
@@ -140,6 +152,8 @@ class InvoiceLineParser:
         if any(keyword in lowered for keyword in _TOTAL_KEYWORDS):
             return False
         if any(keyword in lowered for keyword in _HEADER_KEYWORDS):
+            return False
+        if _DATE_LINE_RE.match(line) or _PHONE_LINE_RE.match(line):
             return False
 
         amounts = find_amounts(line)

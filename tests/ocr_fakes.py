@@ -97,3 +97,23 @@ def make_pdf_bytes() -> bytes:
     doc.save(buf)
     doc.close()
     return buf.getvalue()
+
+
+def make_pdf_bytes_pages(n_pages: int = 2) -> bytes:
+    """Génère un PDF minimal valide de ``n_pages`` pages."""
+    import io
+
+    import pypdfium2 as pdfium
+
+    buf = io.BytesIO()
+    doc = pdfium.PdfDocument.new()
+    for _ in range(n_pages):
+        doc.new_page(width=612, height=792)
+    doc.save(buf)
+    doc.close()
+    return buf.getvalue()
+
+
+def fake_engine_pages(results: list[OcrResult]) -> FakeOcrEngine:
+    """Moteur renvoyant un résultat par page (multi-pages)."""
+    return FakeOcrEngine(results=results)

@@ -4,11 +4,14 @@ Le pipeline se déroule ainsi :
 1. la facture doit être « Déposée » (ou « Erreur système » pour une reprise) ;
 2. passage en « En cours d'analyse » ;
 3. chargement du document (PDF rendu page à page, image telle quelle) ;
-4. reconnaissance par le moteur OCR (PaddleOCR) ;
-5. nettoyage et structuration (champs généraux, financiers, lignes) ;
-6. persistance (``extracted_data``, score de confiance, colonnes métier,
+4. reconnaissance par le moteur OCR (PaddleOCR par défaut, Tesseract en
+   alternative selon ``ocr_engine``) ;
+5. classification des pages (annexes exclues de l'extraction) ;
+6. nettoyage et structuration (champs généraux, financiers, lignes) ;
+7. persistance (``extracted_data`` avec preuves visuelles : images de pages,
+   boîtes englobantes, confiance par champ ; score global, colonnes métier,
    lignes de facture) et éventuelle anomalie de qualité ;
-7. passage en « À vérifier ».
+8. passage en « À vérifier ».
 
 En cas de document illisible, de fichier manquant ou d'échec du moteur, la
 facture passe en « Erreur système » avec le message conservé, et le statut est
@@ -17,9 +20,10 @@ retourné (aucune exception n'est levée pour ces cas attendus).
 
 from __future__ import annotations
 
+import io
 import time
-from statistics import fmean
 
+from PIL import Image
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -35,10 +39,12 @@ from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
 from app.ocr.base import OcrEngine, OcrResult, get_ocr_engine
 from app.ocr.cleaners import clean_text
+from app.ocr.confidence import field_confidence, flag_low_confidence, overall
 from app.ocr.document import DocumentLoader
-from app.ocr.extractor import FieldExtractor
+from app.ocr.extractor import FIELD_LABELS, FieldExtractor
 from app.ocr.lines import InvoiceLineParser
-from app.ocr.schema import OcrExtraction
+from app.ocr.pages import is_annex
+from app.ocr.schema import OcrBox, OcrExtraction, OcrPage, OcrTextBlock
 from app.repositories import (
     AnomalyRepository,
     InvoiceLineRepository,
@@ -97,39 +103,88 @@ class OcrService:
         self.invoice_service.transition_status(invoice, InvoiceStatus.ANALYZING)
 
         try:
-            result, confidence = self._run(invoice)
+            result, confidence, images = self._run(invoice)
         except _EXPECTED_ERRORS as exc:
             self.invoice_service.transition_status(
                 invoice, InvoiceStatus.SYSTEM_ERROR, reason=str(exc)
             )
             return invoice
 
-        self._persist(invoice, result, confidence)
+        self._persist(invoice, result, confidence, images)
         self.invoice_service.transition_status(invoice, InvoiceStatus.TO_REVIEW)
         return invoice
 
-    def _run(self, invoice: Invoice) -> tuple[OcrExtraction, float]:
-        """Charge, reconnaît, nettoie et structure un document."""
+    def _run(self, invoice: Invoice) -> tuple[OcrExtraction, float, list[Image.Image]]:
+        """Charge, reconnaît, nettoie et structure un document.
+
+        Les pages annexes (conditions générales, pièces jointes...) sont
+        exclues de l'extraction mais conservées comme preuve visuelle.
+        """
         images = self.loader.load_images(invoice)
         deadline = time.monotonic() + get_settings().ocr_pipeline_timeout_seconds
-        results = []
+        results: list[OcrResult] = []
         for image in images:
             self._check_deadline(deadline)
             results.append(self.engine.recognize(image))
             self._check_deadline(deadline)
-        texts, confidence = self._aggregate(results)
-        if not texts:
+
+        pages = [
+            OcrPage(
+                page_index=i,
+                texts=result.texts,
+                scores=result.scores,
+                is_annex=is_annex(result.texts),
+                layout=self._build_layout(result),
+            )
+            for i, result in enumerate(results)
+        ]
+
+        main_texts: list[str] = []
+        main_scores: list[float] = []
+        for result, page in zip(results, pages):
+            if page.is_annex:
+                continue
+            for text, score in zip(result.texts, result.scores):
+                cleaned = clean_text(text)
+                if cleaned:
+                    main_texts.append(cleaned)
+                    main_scores.append(score)
+
+        if not main_texts:
             raise DocumentIllegibleError(
                 "Aucun texte exploitable n'a été extrait du document."
             )
 
-        lines = [clean_text(text) for text in texts if clean_text(text)]
-        general, financial = self.extractor.extract(lines)
-        items = self.line_parser.parse(lines)
-        return (
-            OcrExtraction(general=general, financial=financial, lines=items),
-            confidence,
+        general, financial = self.extractor.extract(main_texts)
+        items = self.line_parser.parse(main_texts, main_scores)
+        per_field = field_confidence(main_texts, main_scores, FIELD_LABELS)
+        extraction = OcrExtraction(
+            general=general,
+            financial=financial,
+            lines=items,
+            pages=pages,
+            confidence=per_field,
         )
+        return extraction, overall(main_scores), images
+
+    @staticmethod
+    def _build_layout(result: OcrResult) -> list[OcrTextBlock]:
+        """Assemble les blocs texte d'une page (texte + confiance + boîte)."""
+        blocks: list[OcrTextBlock] = []
+        for i, text in enumerate(result.texts):
+            box = None
+            if i < len(result.boxes):
+                left, top, right, bottom = result.boxes[i]
+                if left or top or right or bottom:
+                    box = OcrBox(left=left, top=top, right=right, bottom=bottom)
+            blocks.append(
+                OcrTextBlock(
+                    text=text,
+                    confidence=result.scores[i] if i < len(result.scores) else None,
+                    box=box,
+                )
+            )
+        return blocks
 
     @staticmethod
     def _check_deadline(deadline: float) -> None:
@@ -140,18 +195,16 @@ class OcrService:
                 f"({get_settings().ocr_pipeline_timeout_seconds:.0f} s)."
             )
 
-    @staticmethod
-    def _aggregate(results: list[OcrResult]) -> tuple[list[str], float]:
-        """Concatène les textes des pages et calcule la confiance moyenne."""
-        texts = [text for result in results for text in result.texts]
-        scores = [score for result in results for score in result.scores]
-        confidence = fmean(scores) if scores else 0.0
-        return texts, confidence
-
     # --- Persistance --------------------------------------------------------------
 
-    def _persist(self, invoice: Invoice, result: OcrExtraction, confidence: float) -> None:
-        """Écrit l'extraction, le score et les lignes sur la facture."""
+    def _persist(
+        self,
+        invoice: Invoice,
+        result: OcrExtraction,
+        confidence: float,
+        images: list[Image.Image],
+    ) -> None:
+        """Écrit l'extraction, le score, les lignes et les preuves visuelles."""
         # Idempotence : supprime les lignes et anomalies d'une analyse passée.
         existing_lines: list[InvoiceLine] = self.lines.list_by_invoice(invoice.id)
         existing_anomalies: list[Anomaly] = self.anomalies.list_by_invoice(invoice.id)
@@ -161,8 +214,12 @@ class OcrService:
             self.anomalies.delete(anomaly)
         self.db.flush()
 
+        data = result.model_dump(mode="json")
+        for page_meta, image in zip(data["pages"], images):
+            page_meta["image_path"] = self._save_page_image(image)
+
         updates: dict = {
-            "extracted_data": result.model_dump(mode="json"),
+            "extracted_data": data,
             "ocr_confidence_score": confidence,
         }
         general, financial = result.general, result.financial
@@ -185,17 +242,53 @@ class OcrService:
         self.invoices.update(invoice, **updates)
 
         for item in result.lines:
-            self.lines.create(invoice_id=invoice.id, **item.model_dump())
+            self.lines.create(
+                invoice_id=invoice.id, **item.model_dump(exclude={"confidence"})
+            )
 
-        if confidence < get_settings().ocr_confidence_threshold:
+        self._flag_quality(invoice, result, confidence)
+
+    def _save_page_image(self, image: Image.Image) -> str:
+        """Encode une page en JPEG et la stocke (chemin relatif retourné)."""
+        buffer = io.BytesIO()
+        image.convert("RGB").save(buffer, format="JPEG", quality=85)
+        return self.storage.save(buffer.getvalue(), suffix=".jpg")
+
+    def _flag_quality(
+        self, invoice: Invoice, result: OcrExtraction, confidence: float
+    ) -> None:
+        """Crée une anomalie de qualité si la confiance est insuffisante.
+
+        Une seule anomalie globale quand la confiance moyenne est sous le
+        seuil ; sinon une anomalie ciblée sur les champs critiques douteux
+        (champ manquant ou sous le seuil) dès que la confiance globale est
+        acceptable.
+        """
+        threshold = get_settings().ocr_confidence_threshold
+        if confidence < threshold:
             self.anomalies.create(
                 invoice_id=invoice.id,
                 category=AnomalyCategory.OTHER,
                 severity=AnomalySeverity.WARNING,
                 message=(
                     "Score de confiance OCR faible : "
-                    f"{confidence:.1%} (seuil "
-                    f"{get_settings().ocr_confidence_threshold:.0%})."
+                    f"{confidence:.1%} (seuil {threshold:.0%})."
                 ),
                 actual_value=f"{confidence:.3f}",
+            )
+            return
+        flagged = flag_low_confidence(result.confidence, confidence, threshold)
+        if flagged:
+            self.anomalies.create(
+                invoice_id=invoice.id,
+                category=AnomalyCategory.OTHER,
+                severity=AnomalySeverity.WARNING,
+                message=(
+                    "Confiance insuffisante sur des champs critiques : "
+                    + ", ".join(sorted(flagged))
+                    + "."
+                ),
+                actual_value=", ".join(
+                    f"{name}={result.confidence.get(name)}" for name in sorted(flagged)
+                ),
             )
