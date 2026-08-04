@@ -18,18 +18,23 @@ const VARIANTS: Record<Variant, string> = {
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
+  size?: "sm" | "md";
   loading?: boolean;
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   function Button(
-    { variant = "primary", loading = false, disabled, className = "", children, ...rest },
+    { variant = "primary", size = "md", loading = false, disabled, className = "", children, ...rest },
     ref,
   ) {
+    const sizes: Record<NonNullable<ButtonProps["size"]>, string> = {
+      sm: "px-2.5 py-1.5 text-xs",
+      md: "px-3.5 py-2 text-sm",
+    };
     return (
       <button
         ref={ref}
-        className={`inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${VARIANTS[variant]} ${className}`}
+        className={`inline-flex items-center justify-center gap-2 rounded-md font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${sizes[size]} ${VARIANTS[variant]} ${className}`}
         disabled={disabled || loading}
         {...rest}
       >

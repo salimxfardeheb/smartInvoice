@@ -31,11 +31,14 @@ from app.core.exceptions import (
     PurchaseOrderNotFoundError,
     SupplierNotFoundError,
 )
+from app.core.config import get_settings
+from app.models.currency_rate import CurrencyRate
 from app.models.purchase_order import PurchaseOrder
 from app.models.purchase_order_line import PurchaseOrderLine
 from app.models.supplier import Supplier
 from app.odoo import OdooClient
 from app.repositories import (
+    CurrencyRateRepository,
     PurchaseOrderLineRepository,
     PurchaseOrderRepository,
     SupplierRepository,
@@ -49,9 +52,15 @@ _PARTNER_FIELDS = [
 _PO_FIELDS = ["id", "name", "partner_id", "state", "date_order", "amount_total", "currency_id"]
 _PO_LINE_FIELDS = [
     "id", "order_id", "sequence", "product_id", "name", "product_qty",
-    "product_uom", "price_unit", "discount", "price_subtotal",
+    "product_uom", "price_unit", "discount", "price_subtotal", "tax_ids",
 ]
-_PRODUCT_FIELDS = ["id", "default_code"]
+# ``product_tmpl_id`` est chargé pour replier ``default_code`` à l'échelle du
+# modèle produit quand une variante sans référence intervient ; ``name`` fournit
+# une dernière référence de repli (la description de la variante).
+_PRODUCT_FIELDS = ["id", "default_code", "name", "product_tmpl_id"]
+_TAX_FIELDS = ["id", "name", "amount"]
+_CURRENCY_RATE_FIELDS = ["id", "currency_id", "rate"]
+_CURRENCY_FIELDS = ["id", "name", "rate"]
 
 # État Odoo d'un bon de commande annulé.
 _CANCELLED_STATES = ("cancel",)
@@ -60,6 +69,8 @@ _CANCELLED_STATES = ("cancel",)
 _PARTNER_SEARCH_LIMIT = 20
 _PO_SEARCH_LIMIT = 20
 _PO_LINE_LIMIT = 500
+_TAX_SEARCH_LIMIT = 500
+_CURRENCY_RATE_LIMIT = 5000
 
 
 class OdooSyncService:
@@ -71,6 +82,55 @@ class OdooSyncService:
         self.suppliers = SupplierRepository(db)
         self.purchase_orders = PurchaseOrderRepository(db)
         self.purchase_order_lines = PurchaseOrderLineRepository(db)
+        self.currency_rates = CurrencyRateRepository(db)
+
+    # --- Taux de change et synchronisation globale ---------------------------------
+
+    def sync_currency_rates(
+        self, *, base_currency: str | None = None
+    ) -> list[CurrencyRate]:
+        """Synchronise les taux de change depuis ``res.currency.rate``.
+
+        Chaque taux Odoo (nb d'unités de base pour 1 unité de la devise) est
+        stocké dans ``currency_rates``, exprimé vers ``base_currency`` (par
+        défaut ``settings.fx_base_currency``). La devise de base elle-même
+        reçoit le taux 1.0.
+        """
+        base = (base_currency or get_settings().fx_base_currency).upper()
+        rows = self.client.search_read(
+            "res.currency.rate",
+            [["rate", "!=", 0]],
+            _CURRENCY_RATE_FIELDS,
+            limit=_CURRENCY_RATE_LIMIT,
+        )
+        stored: list[CurrencyRate] = []
+        seen: set[str] = set()
+        for row in rows:
+            code = self._name_of(row.get("currency_id"))
+            if not code:
+                continue
+            rate = self._as_decimal(row.get("rate"))
+            if rate is None or rate == 0:
+                continue
+            seen.add(code)
+            stored.append(
+                self.currency_rates.set_rate(code.upper(), rate, base_currency=base)
+            )
+        # La devise de référence est, par définition, à 1.0.
+        stored.append(
+            self.currency_rates.set_rate(base, Decimal("1.0"), base_currency=base)
+        )
+        return stored
+
+    def sync_all(self) -> dict:
+        """Synchronise l'ensemble des référentiels (devises pour l'instant).
+
+        Retourne un résumé du travail effectué (nombre de taux enregistrés).
+        À terme, la synchronisation portera aussi sur les fournisseurs, taxes
+        et produits : c'est le point d'entrée d'une synchronisation périodique.
+        """
+        rates = self.sync_currency_rates()
+        return {"currency_rates": len(rates)}
 
     # --- Fournisseur -----------------------------------------------------------
 
@@ -226,21 +286,91 @@ class OdooSyncService:
             if isinstance(row.get("product_id"), (list, tuple)) and row["product_id"]
         }
         refs = self._load_product_refs(sorted(product_ids)) if product_ids else {}
+        tax_ids = {
+            int(tax[0])
+            for row in rows
+            for tax in row.get("tax_ids") or []
+            if isinstance(tax, (list, tuple)) and tax
+        }
+        tax_rates = self._load_tax_rates(sorted(tax_ids)) if tax_ids else {}
 
         lines: list[PurchaseOrderLine] = []
         for index, row in enumerate(rows):
-            lines.append(self._upsert_line(purchase_order, row, index, refs))
+            lines.append(self._upsert_line(purchase_order, row, index, refs, tax_rates))
         return lines
 
     def _load_product_refs(self, product_ids: list[int]) -> dict[int, str]:
-        """Retourne ``{id produit: référence interne}`` depuis ``product.product``."""
+        """Retourne ``{id produit: référence interne}`` depuis ``product.product``.
+
+        Priorité de résolution : ``default_code`` de la variante, puis
+        ``default_code`` du ``product.template`` parent, puis nom de la variante.
+        """
         rows = self.client.search_read(
             "product.product",
             [["id", "in", product_ids]],
             _PRODUCT_FIELDS,
             limit=len(product_ids),
         )
-        return {int(row["id"]): row.get("default_code") for row in rows}
+        refs: dict[int, str] = {}
+        template_ids: set[int] = set()
+        product_names: dict[int, str] = {}
+        for row in rows:
+            pid = int(row["id"])
+            ref = row.get("default_code")
+            product_names[pid] = row.get("name")
+            refs[pid] = ref
+            if not ref:
+                tmpl = row.get("product_tmpl_id")
+                tmpl_id = tmpl[0] if isinstance(tmpl, (list, tuple)) else tmpl
+                if tmpl_id:
+                    template_ids.add(int(tmpl_id))
+        if template_ids:
+            template_rows = self.client.search_read(
+                "product.template",
+                [["id", "in", sorted(template_ids)]],
+                ["id", "default_code"],
+                limit=len(template_ids),
+            )
+            template_codes = {
+                int(r["id"]): r.get("default_code") for r in template_rows
+            }
+            for pid, ref in refs.items():
+                if ref:
+                    continue
+                row = next((r for r in rows if int(r["id"]) == pid), None)
+                tmpl = row.get("product_tmpl_id")
+                tmpl_id = tmpl[0] if isinstance(tmpl, (list, tuple)) else tmpl
+                if tmpl_id:
+                    refs[pid] = template_codes.get(int(tmpl_id))
+                if not refs[pid]:
+                    refs[pid] = product_names.get(pid)
+        return refs
+
+    def _load_tax_rates(self, tax_ids: list[int]) -> dict[int, Decimal]:
+        """Retourne ``{id taxe: taux}`` depuis ``account.tax``."""
+        rows = self.client.search_read(
+            "account.tax",
+            [["id", "in", tax_ids]],
+            _TAX_FIELDS,
+            limit=_TAX_SEARCH_LIMIT,
+        )
+        rates: dict[int, Decimal] = {}
+        for row in rows:
+            rate = self._as_decimal(row.get("amount"))
+            if rate is not None:
+                rates[int(row["id"])] = rate
+        return rates
+
+    def _tax_rate(self, row: dict, tax_rates: dict[int, Decimal]) -> Decimal | None:
+        """Taux de TVA de la ligne, depuis la première ``account.tax`` référencée."""
+        taxes = row.get("tax_ids") or []
+        if not taxes:
+            return None
+        first = taxes[0]
+        tax_id = first[0] if isinstance(first, (list, tuple)) else first
+        if not tax_id:
+            return None
+        return tax_rates.get(int(tax_id))
 
     def _upsert_line(
         self,
@@ -248,6 +378,7 @@ class OdooSyncService:
         row: dict,
         index: int,
         refs: dict[int, str],
+        tax_rates: dict[int, Decimal],
     ) -> PurchaseOrderLine:
         """Crée ou met à jour une ligne de BC dans le cache local."""
         odoo_id = int(row["id"])
@@ -261,6 +392,7 @@ class OdooSyncService:
             "unit_price": self._as_decimal(row.get("price_unit")),
             "discount": self._as_decimal(row.get("discount")),
             "amount": self._as_decimal(row.get("price_subtotal")),
+            "tax_rate": self._tax_rate(row, tax_rates),
         }
         line = self.purchase_order_lines.get_by_odoo_id(odoo_id)
         if line is None:

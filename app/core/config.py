@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     odoo_db: str = ""
     odoo_username: str = ""
     odoo_password: str = ""
+    # Clé API d'un utilisateur applicatif dédié (droits restreints). Si
+    # renseignée, elle prime sur ``odoo_password`` lors de l'authentification
+    # (Odoo 14+ accepte une clé API en lieu et place du mot de passe).
+    odoo_api_key: str = ""
     odoo_timeout_seconds: float = 30.0
 
     # Matching (phase 6) : tolérances des écarts acceptés (ratios relatifs).
@@ -73,6 +77,10 @@ class Settings(BaseSettings):
     matching_price_tolerance: float = 0.02
     matching_amount_tolerance: float = 0.02
     matching_tax_tolerance: float = 0.02
+    # Devise de référence pour le matching multi-devises : les montants d'une
+    # facture sont convertis dans cette devise pour être comparés au BC si les
+    # devises diffèrent (taux fournis par la table ``currency_rates``).
+    fx_base_currency: str = "EUR"
 
     # Sécurité / infrastructure
     # --- CORS (liste d'origines séparées par des virgules ; vide = désactivé)

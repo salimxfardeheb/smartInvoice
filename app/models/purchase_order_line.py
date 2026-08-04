@@ -45,6 +45,8 @@ class PurchaseOrderLine(Base, TimestampMixin):
     unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     discount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # Taux de TVA lu depuis Odoo (account.tax) pour un rapprochement fiable.
+    tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
 
     purchase_order: Mapped[PurchaseOrder] = relationship(back_populates="lines")
 

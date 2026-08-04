@@ -33,6 +33,7 @@ from app.models.purchase_order import PurchaseOrder
 from app.models.purchase_order_line import PurchaseOrderLine
 from app.repositories import (
     AnomalyRepository,
+    CurrencyRateRepository,
     InvoiceLineRepository,
     InvoiceRepository,
     PurchaseOrderLineRepository,
@@ -56,6 +57,10 @@ _SCORE_WEIGHTS: dict[str, float] = {
     "price": 0.15,
     "amount": 0.15,
 }
+
+# État Odoo d'un bon de commande annulé : on refuse de rapprocher une facture
+# sur un bon de commande annulé, même s'il est déjà en cache local.
+_UNMATCHABLE_PO_STATES: frozenset[str] = frozenset({"cancel"})
 
 # Catégories d'anomalies gérées par le matching : elles sont nettoyées à
 # chaque nouveau passage (idempotence) pour éviter les doublons. Les anomalies
@@ -132,6 +137,7 @@ class MatchingService:
         self.anomalies = AnomalyRepository(db)
         self.purchase_orders = PurchaseOrderRepository(db)
         self.purchase_order_lines = PurchaseOrderLineRepository(db)
+        self.currency_rates = CurrencyRateRepository(db)
 
         # Tolérances effectives : un réglage stocké en base (table ``settings``)
         # prime sur la configuration applicative, sans redéploiement.
@@ -177,12 +183,15 @@ class MatchingService:
 
         po_lines: list[PurchaseOrderLine] = []
         line_matches: list[LineMatch] = []
+        fx = self._fx_factor(invoice, purchase_order)
         if purchase_order is not None:
             po_lines = self.purchase_order_lines.list_by_purchase_order(
                 purchase_order.id
             )
             if po_supplier_match:
-                line_matches = self._match_lines(invoice, invoice_lines, po_lines, created)
+                line_matches = self._match_lines(
+                    invoice, invoice_lines, po_lines, created, fx
+                )
             else:
                 # Le BC appartient à un autre fournisseur : rien à rapprocher.
                 line_matches = [
@@ -190,7 +199,7 @@ class MatchingService:
                 ]
 
         amount_ok = self._check_amounts_and_tax(
-            invoice, purchase_order, po_lines, line_matches, po_supplier_match, created
+            invoice, purchase_order, po_lines, line_matches, po_supplier_match, created, fx
         )
 
         score = self._compute_score(
@@ -303,6 +312,25 @@ class MatchingService:
             )
             return purchase_order, 0.0, False
 
+        if purchase_order.state in _UNMATCHABLE_PO_STATES:
+            created.append(
+                self._add_anomaly(
+                    invoice,
+                    category=AnomalyCategory.PURCHASE_ORDER,
+                    severity=AnomalySeverity.WARNING,
+                    message=(
+                        "Le bon de commande « "
+                        + purchase_order.reference
+                        + " » est « "
+                        + str(purchase_order.state)
+                        + " » : aucun rapprochement possible sur un bon de "
+                        "commande annulé."
+                    ),
+                    expected_value=str(purchase_order.state),
+                )
+            )
+            return purchase_order, 0.0, False
+
         return purchase_order, 1.0, True
 
     # --- Doublons --------------------------------------------------------------
@@ -352,6 +380,7 @@ class MatchingService:
         invoice_lines: list[InvoiceLine],
         po_lines: list[PurchaseOrderLine],
         created: list[Anomaly],
+        fx: Decimal | None,
     ) -> list[LineMatch]:
         """Rapproche chaque ligne de facture avec une ligne de BC.
 
@@ -402,8 +431,10 @@ class MatchingService:
             quantity_delta = self._relative_delta(
                 invoice_line.quantity, po_line.quantity
             )
+            # Le prix unitaire facturé est converti dans la devise du BC avant
+            # comparaison quand la facture est dans une autre devise.
             unit_price_delta = self._relative_delta(
-                invoice_line.unit_price, po_line.unit_price
+                self._convert(invoice_line.unit_price, fx), po_line.unit_price
             )
             quantity_ok = self._within_tolerance(
                 quantity_delta, self.quantity_tolerance
@@ -530,6 +561,7 @@ class MatchingService:
         line_matches: list[LineMatch],
         po_supplier_match: bool,
         created: list[Anomaly],
+        fx: Decimal | None,
     ) -> bool:
         """Compare les montants (HT, TTC) et la TVA avec le bon de commande.
 
@@ -555,7 +587,9 @@ class MatchingService:
                 Decimal("0"),
             )
             if expected:
-                delta = self._relative_delta(invoice.total_excl_tax, expected)
+                delta = self._relative_delta(
+                    self._convert(invoice.total_excl_tax, fx), expected
+                )
                 if not self._within_tolerance(delta, self.amount_tolerance):
                     amount_ok = False
                     created.append(
@@ -577,7 +611,10 @@ class MatchingService:
 
         # Total TTC facturé vs total du bon de commande.
         if purchase_order.total_amount is not None and invoice.total_incl_tax is not None:
-            delta = self._relative_delta(invoice.total_incl_tax, purchase_order.total_amount)
+            delta = self._relative_delta(
+                self._convert(invoice.total_incl_tax, fx),
+                purchase_order.total_amount,
+            )
             if not self._within_tolerance(delta, self.amount_tolerance):
                 amount_ok = False
                 created.append(
@@ -607,7 +644,9 @@ class MatchingService:
         else:
             po_tax = None
         if po_tax is not None and invoice.tax_amount is not None:
-            delta = self._relative_delta(invoice.tax_amount, po_tax)
+            delta = self._relative_delta(
+                self._convert(invoice.tax_amount, fx), po_tax
+            )
             if not self._within_tolerance(delta, self.tax_tolerance):
                 amount_ok = False
                 created.append(
@@ -764,6 +803,36 @@ class MatchingService:
         data = invoice.extracted_data or {}
         general = data.get("general")
         return general if isinstance(general, dict) else {}
+
+    def _fx_factor(
+        self, invoice: Invoice, purchase_order: PurchaseOrder | None
+    ) -> Decimal | None:
+        """Facteur de conversion des montants facture vers la devise du BC.
+
+        Le facteur vaut 1.0 quand les deux devises sont identiques et ``None``
+        quand les taux de change ne sont pas disponibles (aucune conversion).
+        """
+        if purchase_order is None:
+            return None
+        invoice_currency = (invoice.currency or "EUR").upper()
+        po_currency = (purchase_order.currency or "EUR").upper()
+        if invoice_currency == po_currency:
+            return Decimal("1.0")
+        base = get_settings().fx_base_currency.upper()
+        invoice_rate = self.currency_rates.get_rate(
+            invoice_currency, base_currency=base
+        )
+        po_rate = self.currency_rates.get_rate(po_currency, base_currency=base)
+        if invoice_rate is None or po_rate is None:
+            return None
+        return invoice_rate / po_rate
+
+    @staticmethod
+    def _convert(value: Decimal | None, fx: Decimal | None) -> Decimal | None:
+        """Convertit un montant facture dans la devise du BC (``fx`` = 1/None → inchangé)."""
+        if value is None or fx is None or fx == Decimal("1.0"):
+            return value
+        return value * fx
 
     @staticmethod
     def _normalize(value: str | None) -> str:

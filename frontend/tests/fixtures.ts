@@ -2,11 +2,13 @@
 
 import type {
   AuditLog,
+  Anomaly,
   DashboardSummary,
   Invoice,
   MatchingResult,
   OcrExtractedData,
   PendingAnomaly,
+  User,
 } from "@/types";
 
 export function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
@@ -144,6 +146,38 @@ export function makePendingAnomaly(overrides: Partial<PendingAnomaly> = {}): Pen
     message: "Quantité différente du bon de commande.",
     expected_value: "10",
     actual_value: "8",
+    created_at: "2026-01-16T09:00:00",
+    ...overrides,
+  };
+}
+
+export function makeUser(overrides: Partial<User> = {}): User {
+  return {
+    id: 1,
+    username: "salim",
+    email: "salim@smartinvoice.io",
+    full_name: "Salim Admin",
+    role: "Administrateur",
+    is_active: true,
+    created_at: "2026-01-01T08:00:00",
+    updated_at: "2026-01-01T08:00:00",
+    ...overrides,
+  };
+}
+
+export function makeAnomaly(overrides: Partial<Anomaly> = {}): Anomaly {
+  return {
+    id: 1,
+    invoice_id: 1,
+    invoice_number: "FAC-2026-001",
+    supplier_name: "ACME SAS",
+    category: "quantite",
+    severity: "warning",
+    message: "Quantité différente du bon de commande.",
+    expected_value: "10",
+    actual_value: "8",
+    resolved: false,
+    resolved_at: null,
     created_at: "2026-01-16T09:00:00",
     ...overrides,
   };

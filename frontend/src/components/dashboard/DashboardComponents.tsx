@@ -56,6 +56,14 @@ export function PendingAnomalies({ summary }: { summary: DashboardSummary }) {
       <CardHeader
         title="Anomalies en attente"
         subtitle="Anomalies de matching non résolues"
+        action={
+          <Link
+            href="/anomalies"
+            className="text-xs font-medium text-brand-600 hover:underline"
+          >
+            Voir toutes →
+          </Link>
+        }
       />
       <CardBody>
         {pending_anomalies.length === 0 ? (

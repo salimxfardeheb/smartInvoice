@@ -4,9 +4,11 @@ import type { InvoiceStatus, AnomalySeverity, AuditAction } from "@/types";
 import {
   ACTION_LABELS,
   CATEGORY_LABELS,
+  SEVERITY_LABELS,
   SEVERITY_STYLES,
   STATUS_STYLES,
 } from "@/lib/status";
+import { BADGE_BASE } from "@/lib/design";
 import type { AnomalyCategory } from "@/types";
 import { Badge } from "@/components/ui/Badge";
 
@@ -14,7 +16,7 @@ import { Badge } from "@/components/ui/Badge";
 export function StatusBadge({ status }: { status: InvoiceStatus }) {
   return (
     <span
-      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${STATUS_STYLES[status] ?? "bg-slate-100 text-slate-700 ring-slate-300"}`}
+      className={`${BADGE_BASE} ${STATUS_STYLES[status] ?? STATUS_STYLES["Déposée"]}`}
     >
       {status}
     </span>
@@ -25,9 +27,9 @@ export function StatusBadge({ status }: { status: InvoiceStatus }) {
 export function SeverityBadge({ severity }: { severity: AnomalySeverity }) {
   return (
     <span
-      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium capitalize ring-1 ${SEVERITY_STYLES[severity] ?? "bg-slate-100 text-slate-700 ring-slate-300"}`}
+      className={`${BADGE_BASE} ${SEVERITY_STYLES[severity] ?? SEVERITY_STYLES.info}`}
     >
-      {severity}
+      {SEVERITY_LABELS[severity] ?? severity}
     </span>
   );
 }

@@ -37,6 +37,7 @@ EXPECTED_TABLES = {
     "refresh_tokens",
     "tasks",
     "settings",
+    "currency_rates",
 }
 
 

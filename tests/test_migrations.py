@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401
 from app.db.base import Base
 
-HEAD = "0007_tasks_settings_version"
+HEAD = "0008_odoo_hardening"
 
 EXPECTED_TABLES = {
     "users",
@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "refresh_tokens",
     "tasks",
     "settings",
+    "currency_rates",
 }
 
 

@@ -23,6 +23,7 @@ from app.core.exceptions import (
 from app.models.purchase_order import PurchaseOrder
 from app.models.supplier import Supplier
 from app.repositories import (
+    CurrencyRateRepository,
     PurchaseOrderLineRepository,
     PurchaseOrderRepository,
     SupplierRepository,
@@ -41,11 +42,17 @@ class FakeOdooClient:
         purchase_orders: list[dict] | None = None,
         lines: list[dict] | None = None,
         products: list[dict] | None = None,
+        templates: list[dict] | None = None,
+        taxes: list[dict] | None = None,
+        currency_rates: list[dict] | None = None,
     ) -> None:
         self.partners = list(partners or [])
         self.purchase_orders = list(purchase_orders or [])
         self.lines = list(lines or [])
         self.products = list(products or [])
+        self.templates = list(templates or [])
+        self.taxes = list(taxes or [])
+        self.currency_rates = list(currency_rates or [])
         self.calls: list[tuple] = []
 
     def search_read(self, model, domain, fields, *, limit=None, offset=0) -> list[dict]:
@@ -55,7 +62,10 @@ class FakeOdooClient:
             "purchase.order": self.purchase_orders,
             "purchase.order.line": self.lines,
             "product.product": self.products,
-        }[model]
+            "product.template": self.templates,
+            "account.tax": self.taxes,
+            "res.currency.rate": self.currency_rates,
+        }.get(model, [])
         return list(table)
 
 
@@ -340,6 +350,139 @@ class TestLoadPurchaseOrderLines:
         # Aucun appel product.product si aucune ligne ne porte de produit.
         models = [call[0] for call in service.client.calls]
         assert "product.product" not in models
+
+    def test_line_tax_rate_resolved_from_account_tax(self, session) -> None:
+        po = self._po(session)
+        service = make_service(
+            session,
+            lines=[{
+                "id": 1, "order_id": 100, "sequence": 10,
+                "product_id": (5, "Câble HDMI"), "name": "Câble HDMI",
+                "product_qty": 2.0, "product_uom": (1, "Unités"),
+                "price_unit": 8.5, "discount": 0.0, "price_subtotal": 17.0,
+                "tax_ids": [(11, "TVA 20%")],
+            }],
+            products=[{"id": 5, "default_code": "CBL-001"}],
+            taxes=[{"id": 11, "name": "TVA 20%", "amount": 20.0}],
+        )
+        lines = service.load_purchase_order_lines(po)
+        assert lines[0].tax_rate == Decimal("20.0")
+
+    def test_line_without_tax_keeps_none(self, session) -> None:
+        po = self._po(session)
+        service = make_service(
+            session,
+            lines=[{
+                "id": 1, "order_id": 100, "sequence": 10,
+                "product_id": (5, "Câble"), "name": "Câble",
+                "product_qty": 1.0, "product_uom": (1, "Unités"),
+                "price_unit": 8.5, "discount": 0.0, "price_subtotal": 8.5,
+            }],
+            products=[{"id": 5, "default_code": "CBL-001"}],
+        )
+        lines = service.load_purchase_order_lines(po)
+        assert lines[0].tax_rate is None
+        # Aucun appel account.tax quand les lignes n'en référencent pas.
+        models = [call[0] for call in service.client.calls]
+        assert "account.tax" not in models
+
+    def test_product_ref_falls_back_to_template_then_name(self, session) -> None:
+        po = self._po(session)
+        service = make_service(
+            session,
+            lines=[
+                {
+                    "id": 1, "order_id": 100, "sequence": 10,
+                    "product_id": (5, "Variante sans code"), "name": "Variante sans code",
+                    "product_qty": 1.0, "product_uom": (1, "Unités"),
+                    "price_unit": 10.0, "discount": 0.0, "price_subtotal": 10.0,
+                },
+                {
+                    "id": 2, "order_id": 100, "sequence": 20,
+                    "product_id": (7, "Produit nu"), "name": "Produit nu",
+                    "product_qty": 1.0, "product_uom": (1, "Unités"),
+                    "price_unit": 5.0, "discount": 0.0, "price_subtotal": 5.0,
+                },
+            ],
+            products=[
+                # Variante sans ``default_code`` mais rattachée à un modèle codé.
+                {"id": 5, "default_code": None, "name": "Variante sans code",
+                 "product_tmpl_id": (900, "Modèle")},
+                # Ni variante ni modèle ne portent de code : repli sur le nom.
+                {"id": 7, "default_code": None, "name": "Produit nu",
+                 "product_tmpl_id": (901, "Modèle nu")},
+            ],
+            templates=[
+                {"id": 900, "default_code": "TPL-900", "name": "Modèle"},
+                {"id": 901, "default_code": None, "name": "Modèle nu"},
+            ],
+        )
+        lines = service.load_purchase_order_lines(po)
+        assert lines[0].product_ref == "TPL-900"
+        assert lines[1].product_ref == "Produit nu"
+
+    def test_products_with_default_code_skip_template_call(self, session) -> None:
+        po = self._po(session)
+        service = make_service(
+            session,
+            lines=[{
+                "id": 1, "order_id": 100, "sequence": 10,
+                "product_id": (5, "Câble"), "name": "Câble",
+                "product_qty": 1.0, "product_uom": (1, "Unités"),
+                "price_unit": 8.5, "discount": 0.0, "price_subtotal": 8.5,
+            }],
+            products=[{"id": 5, "default_code": "CBL-001"}],
+        )
+        service.load_purchase_order_lines(po)
+        models = [call[0] for call in service.client.calls]
+        assert "product.template" not in models
+
+
+class TestSyncCurrencyRates:
+    def test_rates_synced_and_persisted(self, session) -> None:
+        service = make_service(
+            session,
+            currency_rates=[
+                {"id": 1, "currency_id": (2, "USD"), "rate": 0.92},
+                {"id": 2, "currency_id": (3, "GBP"), "rate": 1.16},
+            ],
+        )
+        rates = service.sync_currency_rates(base_currency="EUR")
+
+        stored = CurrencyRateRepository(session)
+        assert stored.get_rate("USD") == Decimal("0.92")
+        assert stored.get_rate("GBP") == Decimal("1.16")
+        # La devise de base est inscrite à 1.0.
+        assert stored.get_rate("EUR") == Decimal("1.0")
+        # Le résultat expose les taux enregistrés (base comprise).
+        assert {r.code for r in rates} == {"USD", "GBP", "EUR"}
+
+    def test_default_base_currency_from_settings(self, session) -> None:
+        service = make_service(session, currency_rates=[])
+        service.sync_currency_rates()
+        assert CurrencyRateRepository(session).get_rate("EUR") == Decimal("1.0")
+
+    def test_invalid_rows_are_ignored(self, session) -> None:
+        service = make_service(
+            session,
+            currency_rates=[
+                {"id": 1, "currency_id": (2, "USD"), "rate": 0.92},
+                {"id": 2, "currency_id": False, "rate": 1.0},   # sans devise
+                {"id": 3, "currency_id": (4, "XYZ"), "rate": 0.0},  # nul
+            ],
+        )
+        service.sync_currency_rates()
+        assert CurrencyRateRepository(session).get_rate("USD") == Decimal("0.92")
+        assert CurrencyRateRepository(session).get_rate("XYZ") is None
+
+    def test_sync_all_returns_summary(self, session) -> None:
+        service = make_service(
+            session,
+            currency_rates=[{"id": 1, "currency_id": (2, "USD"), "rate": 0.92}],
+        )
+        summary = service.sync_all()
+        assert summary == {"currency_rates": 2}  # USD + devise de base
+        assert CurrencyRateRepository(session).get_rate("USD") == Decimal("0.92")
 
 
 class TestConversionHelpers:

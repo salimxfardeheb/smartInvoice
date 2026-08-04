@@ -37,9 +37,16 @@ HAPPY_PO_REFERENCE = "PO-2026-0123"
 class FakeOdooClient:
     """Bouchon du client Odoo : crée un ``account.move`` et enregistre l'appel."""
 
-    def __init__(self, *, move_id: int = 9001, error: OdooError | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        move_id: int = 9001,
+        error: OdooError | None = None,
+        existing_moves: list[dict] | None = None,
+    ) -> None:
         self.move_id = move_id
         self.error = error
+        self.existing_moves = list(existing_moves or [])
         self.calls: list[tuple[str, dict]] = []
 
     def create(self, model: str, values: dict) -> int:
@@ -47,6 +54,9 @@ class FakeOdooClient:
         if self.error is not None:
             raise self.error
         return self.move_id
+
+    def search_read(self, model, domain, fields, *, limit=None, offset=0) -> list[dict]:
+        return list(self.existing_moves)
 
 
 def happy_texts() -> list[str]:

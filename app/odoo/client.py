@@ -78,6 +78,7 @@ class OdooClient:
         db: str | None = None,
         username: str | None = None,
         password: str | None = None,
+        api_key: str | None = None,
         timeout: float | None = None,
     ) -> None:
         settings = get_settings()
@@ -85,18 +86,30 @@ class OdooClient:
         self.db = db or settings.odoo_db
         self.username = username or settings.odoo_username
         self.password = password or settings.odoo_password
+        # Une clé API d'utilisateur applicatif prime sur le mot de passe.
+        self.api_key = api_key if api_key is not None else settings.odoo_api_key
         self.timeout = timeout if timeout is not None else settings.odoo_timeout_seconds
 
         self._uid: int | None = None
         self._common: xmlrpc.client.ServerProxy | None = None
         self._models: xmlrpc.client.ServerProxy | None = None
 
+    @property
+    def _effective_password(self) -> str:
+        """Secret transmis à Odoo : clé API si présente, sinon mot de passe."""
+        return self.api_key or self.password
+
     # --- Configuration -------------------------------------------------------
 
     @property
     def is_configured(self) -> bool:
         """Indique si les paramètres de connexion sont complets."""
-        return all((self.url, self.db, self.username, self.password))
+        return all((self.url, self.db, self.username, self._effective_password))
+
+    @property
+    def is_service_account(self) -> bool:
+        """Indique si l'authentification repose sur une clé API (utilisateur applicatif)."""
+        return bool(self.api_key)
 
     # --- Authentification ------------------------------------------------------
 
@@ -111,14 +124,14 @@ class OdooClient:
             return self._uid
         if not self.is_configured:
             raise OdooNotConfiguredError(
-                "La configuration Odoo (URL, base, utilisateur, mot de passe) "
-                "est incomplète."
+                "La configuration Odoo (URL, base, utilisateur, mot de passe ou "
+                "clé API) est incomplète."
             )
 
         common = self._get_common()
         uid = self._call(
             lambda: common.authenticate(
-                self.db, self.username, self.password, {}
+                self.db, self.username, self._effective_password, {}
             )
         )
         if not uid:
@@ -152,7 +165,7 @@ class OdooClient:
             kwargs["limit"] = limit
         return self._call(
             lambda: models.execute_kw(
-                self.db, uid, self.password, model, "search_read", [domain], kwargs
+                self.db, uid, self._effective_password, model, "search_read", [domain], kwargs
             )
         )
 
@@ -165,7 +178,7 @@ class OdooClient:
             kwargs["limit"] = limit
         return self._call(
             lambda: models.execute_kw(
-                self.db, uid, self.password, model, "search", [domain], kwargs
+                self.db, uid, self._effective_password, model, "search", [domain], kwargs
             )
         )
 
@@ -177,7 +190,7 @@ class OdooClient:
             lambda: models.execute_kw(
                 self.db,
                 uid,
-                self.password,
+                self._effective_password,
                 model,
                 "read",
                 [ids],
@@ -195,7 +208,7 @@ class OdooClient:
         models = self._get_models()
         record_id = self._call(
             lambda: models.execute_kw(
-                self.db, uid, self.password, model, "create", [values]
+                self.db, uid, self._effective_password, model, "create", [values]
             )
         )
         return int(record_id)

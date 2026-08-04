@@ -33,16 +33,28 @@ from tests.conftest import make_invoice, make_supplier
 class FakeOdooClient:
     """Bouchon du client Odoo : joue la création et enregistre les appels."""
 
-    def __init__(self, *, move_id: int = 1001, error: OdooError | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        move_id: int = 1001,
+        error: OdooError | None = None,
+        existing_moves: list[dict] | None = None,
+    ) -> None:
         self.move_id = move_id
         self.error = error
+        self.existing_moves = list(existing_moves or [])
         self.calls: list[tuple[str, dict]] = []
+        self.search_calls: list[tuple] = []
 
     def create(self, model: str, values: dict) -> int:
         self.calls.append((model, values))
         if self.error is not None:
             raise self.error
         return self.move_id
+
+    def search_read(self, model, domain, fields, *, limit=None, offset=0) -> list[dict]:
+        self.search_calls.append((model, domain, fields, limit, offset))
+        return list(self.existing_moves)
 
 
 def _make_user(session, *, username: str = "comptable"):
@@ -303,6 +315,76 @@ class TestCreateVendorBill:
 
         assert invoice.status is InvoiceStatus.VALIDATED
         assert invoice.vendor_bill_id is None
+
+    def test_vendor_bill_failure_records_attempt_and_error(self, session) -> None:
+        invoice = _make_invoice(session)
+        user = _make_user(session)
+        service, _ = _service(session, error=OdooError("timeout"))
+
+        service.validate(invoice, user)
+        with pytest.raises(OdooError):
+            service.create_vendor_bill(invoice, user)
+        with pytest.raises(OdooError):
+            service.create_vendor_bill(invoice, user)
+
+        assert invoice.vendor_bill_attempts == 2
+        assert "timeout" in invoice.vendor_bill_error
+
+    def test_vendor_bill_success_resets_attempts(self, session) -> None:
+        invoice = _make_invoice(session)
+        user = _make_user(session)
+        service, fake = _service(session, error=OdooError("down"))
+        service.validate(invoice, user)
+        with pytest.raises(OdooError):
+            service.create_vendor_bill(invoice, user)
+        assert invoice.vendor_bill_attempts == 1
+
+        # La relance finit par réussir : compteur remis à zéro, erreur effacée.
+        fake.error = None
+        result = service.create_vendor_bill(invoice, user)
+        assert result.status is InvoiceStatus.VENDOR_BILL_CREATED
+        assert invoice.vendor_bill_attempts == 0
+        assert invoice.vendor_bill_error is None
+
+    def test_vendor_bill_failure_reconciles_existing_move(self, session) -> None:
+        invoice = _make_invoice(session)
+        user = _make_user(session)
+        service, fake = _service(
+            session,
+            error=OdooError("Duplicate ref"),
+            existing_moves=[{"id": 7777, "ref": "FAC-2026-001"}],
+        )
+        service.validate(invoice, user)
+
+        result = service.create_vendor_bill(invoice, user)
+
+        # L'account.move Odoo déjà présente est réconciliée avec la facture.
+        assert result.vendor_bill_id == 7777
+        assert result.vendor_bill_attempts == 0
+        assert result.vendor_bill_error is None
+        assert result.status is InvoiceStatus.VALIDATED  # pas de transition forcée
+        logs = AuditLogRepository(session).list_by_invoice(invoice.id)
+        assert AuditAction.VENDOR_BILL_CREATED in {log.action for log in logs}
+        assert any("réconciliée" in log.message for log in logs)
+
+    def test_vendor_bill_is_idempotent_when_already_linked(self, session) -> None:
+        invoice = _make_invoice(
+            session, status=InvoiceStatus.VALIDATED
+        )
+        invoice = InvoiceRepository(session).update(
+            invoice, vendor_bill_id=1234
+        )
+        session.commit()
+        user = _make_user(session)
+        service, fake = _service(session)
+
+        result = service.create_vendor_bill(invoice, user)
+
+        assert result.vendor_bill_id == 1234
+        # Aucun appel de création émis vers Odoo (réconciliation idempotente).
+        assert fake.calls == []
+        logs = AuditLogRepository(session).list_by_invoice(invoice.id)
+        assert any("réconciliée" in log.message for log in logs)
 
     def test_vendor_bill_requires_validated_status(self, session) -> None:
         invoice = _make_invoice(session)  # À vérifier

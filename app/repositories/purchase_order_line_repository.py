@@ -28,6 +28,7 @@ class PurchaseOrderLineRepository(BaseRepository[PurchaseOrderLine]):
         unit_price: Decimal | None = None,
         discount: Decimal | None = None,
         amount: Decimal | None = None,
+        tax_rate: Decimal | None = None,
     ) -> PurchaseOrderLine:
         """Crée une ligne de bon de commande dans le cache local."""
         return self.add(
@@ -42,6 +43,7 @@ class PurchaseOrderLineRepository(BaseRepository[PurchaseOrderLine]):
                 unit_price=unit_price,
                 discount=discount,
                 amount=amount,
+                tax_rate=tax_rate,
             )
         )
 

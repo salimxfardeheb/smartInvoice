@@ -6,6 +6,7 @@ L'import de ce module enregistre l'intégralité des tables dans
 
 from app.models.anomaly import Anomaly
 from app.models.audit_log import AuditLog
+from app.models.currency_rate import CurrencyRate
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
 from app.models.purchase_order import PurchaseOrder
@@ -19,6 +20,7 @@ from app.models.user import User
 __all__ = [
     "Anomaly",
     "AuditLog",
+    "CurrencyRate",
     "Invoice",
     "InvoiceLine",
     "PurchaseOrder",

@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import (
     DuplicateInvoiceError,
     InvalidStatusTransitionError,
+    OdooError,
     RejectionReasonRequiredError,
 )
 from app.models.audit_log import AuditLog
@@ -229,15 +230,54 @@ class ValidationService:
 
         Construit l'``account.move`` (type ``in_invoice``) à partir de la
         facture et de ses lignes, puis lie le ``move_id`` créé à la facture
-        et la fait passer « Vendor Bill créée ». En cas d'échec côté Odoo,
-        l'erreur remonte (statut inchangé, nouvelle tentative possible).
+        et la fait passer « Vendor Bill créée ».
+
+        Robustesse (retry et réconciliation de doublons) :
+        - si une Vendor Bill est déjà liée à la facture, l'appel est
+          idempotent (rien n'est recréé dans Odoo) ;
+        - si la création échoue mais qu'une ``account.move`` portant la même
+          référence existe déjà côté Odoo (création antérieure dont la
+          réponse a été perdue), elle est réconciliée avec la facture ;
+        - sinon, le compteur de tentatives (``vendor_bill_attempts``) est
+          incrémenté et le dernier message d'erreur
+          (``vendor_bill_error``) est conservé pour diagnostiquer la
+          relance, puis l'erreur remonte (statut inchangé).
         """
+        # Idempotence : la Vendor Bill est déjà liée → simple réconciliation.
+        if invoice.vendor_bill_id is not None:
+            self._log_reconciled(invoice, user, invoice.vendor_bill_id)
+            return invoice
+
         self._require_status(invoice, InvoiceStatus.VALIDATED)
 
         values = self._build_move_values(invoice)
-        move_id = self.odoo_client.create("account.move", values)
+        try:
+            move_id = int(self.odoo_client.create("account.move", values))
+        except OdooError as exc:
+            existing_id = self._find_existing_vendor_bill(invoice)
+            if existing_id is not None:
+                self.invoices.update(
+                    invoice,
+                    vendor_bill_id=existing_id,
+                    vendor_bill_attempts=0,
+                    vendor_bill_error=None,
+                )
+                self._log_reconciled(invoice, user, existing_id)
+                self.db.flush()
+                return invoice
+            self.invoices.update(
+                invoice,
+                vendor_bill_attempts=(invoice.vendor_bill_attempts or 0) + 1,
+                vendor_bill_error=str(exc),
+            )
+            raise
 
-        self.invoices.update(invoice, vendor_bill_id=int(move_id))
+        self.invoices.update(
+            invoice,
+            vendor_bill_id=int(move_id),
+            vendor_bill_attempts=0,
+            vendor_bill_error=None,
+        )
         self._transition(invoice, InvoiceStatus.VENDOR_BILL_CREATED)
         self.audit.create(
             invoice_id=invoice.id,
@@ -248,6 +288,32 @@ class ValidationService:
         )
         self.db.flush()
         return invoice
+
+    def _find_existing_vendor_bill(self, invoice: Invoice) -> int | None:
+        """Recherche côté Odoo une ``account.move`` portant la référence facture."""
+        rows = self.odoo_client.search_read(
+            "account.move",
+            [["ref", "=", invoice.invoice_number]],
+            ["id", "ref"],
+            limit=1,
+        )
+        if not rows:
+            return None
+        return int(rows[0]["id"])
+
+    def _log_reconciled(self, invoice: Invoice, user: User, move_id: int) -> None:
+        """Trace une réconciliation : une Vendor Bill existante est rattachée."""
+        self.audit.create(
+            invoice_id=invoice.id,
+            user_id=user.id,
+            action=AuditAction.VENDOR_BILL_CREATED,
+            message=(
+                f"Vendor Bill déjà présente dans Odoo (account.move #{move_id}) : "
+                "facture réconciliée."
+            ),
+            details={"move_id": int(move_id), "reconciled": True},
+        )
+        self.db.flush()
 
     def _build_move_values(self, invoice: Invoice) -> dict:
         """Construit les valeurs de l'``account.move`` (Vendor Bill) depuis la facture."""

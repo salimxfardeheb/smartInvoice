@@ -58,6 +58,25 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   Acheteur: "Acheteur",
 };
 
+export const ROLE_TONES: Record<UserRole, string> = {
+  Administrateur: "violet",
+  Comptable: "blue",
+  Acheteur: "emerald",
+};
+
+export const SEVERITY_LABELS: Record<AnomalySeverity, string> = {
+  info: "Info",
+  warning: "Avertissement",
+  critical: "Critique",
+};
+
+export const TASK_STATE_LABELS: Record<string, string> = {
+  "en attente": "En attente",
+  "en cours": "En cours",
+  réussi: "Réussi",
+  échoué: "Échoué",
+};
+
 export const SORT_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "created_at_desc", label: "Dépôt : plus récent" },
   { value: "created_at_asc", label: "Dépôt : plus ancien" },

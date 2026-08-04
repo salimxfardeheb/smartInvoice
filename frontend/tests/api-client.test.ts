@@ -12,6 +12,55 @@ function fakeResponse(status: number, body: unknown): Response {
   } as unknown as Response;
 }
 
+interface FakeProgressEvent {
+  lengthComputable: boolean;
+  loaded: number;
+  total: number;
+}
+
+/** Fake minimal de XMLHttpRequest pour tester les uploads (progress + erreurs). */
+function installFakeXHR(
+  setup: (xhr: FakeXHRInstance) => void,
+): { last: () => FakeXHRInstance } {
+  const holder: { current: FakeXHRInstance | null } = { current: null };
+  class FakeXHR {
+    upload: { onprogress: ((e: FakeProgressEvent) => void) | null } = { onprogress: null };
+    status = 0;
+    response = "";
+    url = "";
+    headers: Record<string, string> = {};
+    sentBody: unknown = null;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    open(_method: string, url: string) {
+      this.url = url;
+    }
+    setRequestHeader(key: string, value: string) {
+      this.headers[key] = value;
+    }
+    send(body: unknown) {
+      this.sentBody = body;
+      holder.current = this;
+      setup(this as unknown as FakeXHRInstance);
+    }
+  }
+  global.XMLHttpRequest = FakeXHR as unknown as typeof XMLHttpRequest;
+  return { last: () => holder.current as FakeXHRInstance };
+}
+
+interface FakeXHRInstance {
+  upload: { onprogress: ((e: FakeProgressEvent) => void) | null };
+  status: number;
+  response: string;
+  url: string;
+  headers: Record<string, string>;
+  sentBody: unknown;
+  onload: (() => void) | null;
+  onerror: (() => void) | null;
+  onabort: (() => void) | null;
+}
+
 describe("api-client", () => {
   let fetchMock: jest.Mock;
 
@@ -56,11 +105,50 @@ describe("api-client", () => {
 
   test("lève ApiError avec le détail métier", async () => {
     setTokens("access-1", "refresh-1");
-    fetchMock.mockResolvedValueOnce(fakeResponse(409, { detail: "Doublon détecté." }));
+    const xhr = installFakeXHR((instance) => {
+      setTimeout(() => {
+        instance.status = 409;
+        instance.response = JSON.stringify({ detail: "Doublon détecté." });
+        instance.onload?.();
+      }, 0);
+    });
 
     await expect(api.depositInvoice(new FormData())).rejects.toMatchObject({
       status: 409,
       detail: "Doublon détecté.",
+    });
+    expect(xhr.last().headers.Authorization).toBe("Bearer access-1");
+  });
+
+  test("depositInvoice envoie via XHR et reporte la progression", async () => {
+    setTokens("access-1", "refresh-1");
+    const xhr = installFakeXHR((instance) => {
+      setTimeout(() => {
+        instance.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 });
+        instance.upload.onprogress?.({ lengthComputable: true, loaded: 100, total: 100 });
+        instance.status = 201;
+        instance.response = JSON.stringify({ id: 7 });
+        instance.onload?.();
+      }, 0);
+    });
+
+    const progress: number[] = [];
+    const invoice = await api.depositInvoice(new FormData(), (percent) => progress.push(percent));
+
+    expect(invoice.id).toBe(7);
+    expect(progress).toEqual([50, 100]);
+    expect(xhr.last().url).toContain("/api/invoices");
+    expect(xhr.last().sentBody).toBeInstanceOf(FormData);
+  });
+
+  test("depositInvoice lève une erreur réseau via XHR", async () => {
+    setTokens("access-1", "refresh-1");
+    installFakeXHR((instance) => {
+      setTimeout(() => instance.onerror?.(), 0);
+    });
+
+    await expect(api.depositInvoice(new FormData())).rejects.toMatchObject({
+      status: 0,
     });
   });
 

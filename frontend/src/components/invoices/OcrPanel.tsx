@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/format";
+import { useTaskPolling } from "@/hooks/useTask";
 import type { Invoice, OcrResult } from "@/types";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
@@ -50,8 +51,11 @@ function ExtractedLines({ invoice }: { invoice: Invoice }) {
 export function OcrPanel({ invoice, onProcessed }: { invoice: Invoice; onProcessed: (result: OcrResult) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryTaskId, setRetryTaskId] = useState<number | null>(null);
+  const { task: retryTask, running: retryRunning } = useTaskPolling(retryTaskId);
 
-  const canProcess = invoice.status === "Déposée" || invoice.status === "Erreur système";
+  const canProcess = invoice.status === "Déposée";
+  const isSystemError = invoice.status === "Erreur système";
 
   const process = useCallback(async () => {
     setBusy(true);
@@ -66,8 +70,23 @@ export function OcrPanel({ invoice, onProcessed }: { invoice: Invoice; onProcess
     }
   }, [invoice.id, onProcessed]);
 
+  const retry = useCallback(async () => {
+    setError(null);
+    try {
+      const task = await api.retryInvoice(invoice.id);
+      setRetryTaskId(task.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Impossible de relancer l'analyse.");
+    }
+  }, [invoice.id]);
+
   // Laisse l'état d'erreur local expirer quand la facture est rafraîchie.
-  useEffect(() => setError(null), [invoice.id]);
+  useEffect(() => {
+    setError(null);
+    if (retryTask && retryTask.state === "réussi") {
+      onProcessed(retryTask.result as unknown as OcrResult);
+    }
+  }, [invoice.id, retryTask, onProcessed]);
 
   const general = invoice.extracted_data?.general;
   const financial = invoice.extracted_data?.financial;
@@ -128,6 +147,31 @@ export function OcrPanel({ invoice, onProcessed }: { invoice: Invoice; onProcess
           <CardHeader title="Lignes extraites" />
           <CardBody>
             <ExtractedLines invoice={invoice} />
+          </CardBody>
+        </Card>
+      )}
+
+      {isSystemError && (
+        <Card>
+          <CardHeader title="Ré-analyse" subtitle="Cette facture est en erreur système" />
+          <CardBody className="space-y-3">
+            {retryTask && retryTask.state === "échoué" && (
+              <Alert tone="danger" title="La ré-analyse a échoué">
+                {retryTask.error_message ?? "Erreur inconnue pendant la ré-analyse."}
+              </Alert>
+            )}
+            {retryRunning || retryTask?.state === "en cours" || retryTask?.state === "en attente" ? (
+              <p role="status" className="text-sm text-slate-500">
+                Ré-analyse en cours&hellip;
+              </p>
+            ) : retryTask?.state === "réussi" ? (
+              <Alert tone="success">Ré-analyse terminée avec succès.</Alert>
+            ) : null}
+            <div className="flex justify-end">
+              <Button onClick={retry} loading={retryRunning} variant="danger">
+                Réanalyser
+              </Button>
+            </div>
           </CardBody>
         </Card>
       )}

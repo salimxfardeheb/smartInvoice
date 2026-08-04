@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models.enums import AnomalyCategory
 from app.repositories import (
     AnomalyRepository,
+    CurrencyRateRepository,
     InvoiceLineRepository,
     InvoiceRepository,
     PurchaseOrderLineRepository,
@@ -36,6 +37,9 @@ def _build_context(
     supplier: object | None = None,
     po_reference: str = "PO-2026-001",
     po_total: str | None = "461.25",
+    po_state: str = "purchase",
+    po_currency: str = "EUR",
+    invoice_currency: str = "EUR",
     create_po: bool = True,
     totals: tuple[str, str, str] | None = ("385.00", "76.25", "461.25"),
     invoice_lines: list[dict] | None = None,
@@ -69,7 +73,8 @@ def _build_context(
             odoo_id=100,
             reference=po_reference,
             supplier_id=supplier.id,
-            state="purchase",
+            state=po_state,
+            currency=po_currency,
             total_amount=po_total,
         )
         for data in po_lines:
@@ -104,6 +109,7 @@ def _build_context(
     invoice = InvoiceRepository(session).create(
         invoice_number=invoice_number,
         supplier_id=supplier.id,
+        currency=invoice_currency,
         total_excl_tax=total_excl,
         tax_amount=tax_amount,
         total_incl_tax=total_incl,
@@ -494,6 +500,108 @@ class TestPoBelongsToAnotherSupplier:
         assert result.matched_line_count == 0
         assert result.line_matches[0].matched is False
         assert result.score == pytest.approx(0.1)
+
+
+class TestCancelledPurchaseOrder:
+    """Un bon de commande annulé ne peut pas être rapproché."""
+
+    def test_cancelled_po_is_rejected(self, session) -> None:
+        supplier, po, invoice = _build_context(session, po_state="cancel")
+
+        result = MatchingService(session).match(invoice)
+
+        assert result.purchase_order is not None
+        assert result.purchase_order.id == po.id
+        po_anomalies = [
+            a
+            for a in result.anomalies
+            if a.category is AnomalyCategory.PURCHASE_ORDER
+        ]
+        assert len(po_anomalies) == 1
+        assert "annulé" in po_anomalies[0].message
+        # Aucune ligne rapprochée, montants non comparés, score faible.
+        assert result.matched_line_count == 0
+        assert result.line_matches and all(not m.matched for m in result.line_matches)
+        assert result.score == pytest.approx(0.1)
+
+
+class TestMultiCurrencyMatching:
+    """Matching en devise différente : conversion via les taux de change."""
+
+    def test_same_currency_is_untouched(self, session) -> None:
+        supplier, po, invoice = _build_context(session)
+
+        service = MatchingService(session)
+        assert service._fx_factor(invoice, po) == Decimal("1.0")
+        assert service._convert(Decimal("10"), Decimal("1.0")) == Decimal("10")
+
+    def test_rates_convert_invoice_to_po_currency(self, session) -> None:
+        # Facture en USD, BC en EUR : 1 USD = 0.50 EUR. Les montants USD
+        # valent donc le double des montants EUR du bon de commande.
+        CurrencyRateRepository(session).set_rate("USD", Decimal("0.50"))
+        supplier, po, invoice = _build_context(
+            session,
+            po_currency="EUR",
+            invoice_currency="USD",
+            po_total="461.25",
+            totals=("770.00", "152.50", "922.50"),
+            invoice_lines=[
+                {
+                    "line_number": 1, "description": "Câble HDMI",
+                    "product_ref": "CBL-001", "quantity": "10.0",
+                    "unit_price": "17.00", "tax_rate": "0.20", "amount": "170.00",
+                },
+                {
+                    "line_number": 2, "description": "Écran LED",
+                    "product_ref": "SCR-24", "quantity": "2.0",
+                    "unit_price": "300.00", "tax_rate": "0.20", "amount": "600.00",
+                },
+            ],
+        )
+        session.commit()
+
+        result = MatchingService(session).match(invoice)
+
+        assert result.score == pytest.approx(1.0)
+        assert not result.anomalies
+
+    def test_missing_rates_fall_back_to_raw_compare(self, session) -> None:
+        # Sans taux, la conversion est impossible : pas de faux négatif
+        # sur le prix unitaire, mais les montants peuvent être en écart.
+        supplier, po, invoice = _build_context(session, po_currency="EUR", invoice_currency="USD")
+
+        service = MatchingService(session)
+        assert service._fx_factor(invoice, po) is None
+        assert service._convert(Decimal("10"), None) == Decimal("10")
+
+    def test_currency_gap_is_detected_with_wrong_rate(self, session) -> None:
+        # Un taux erroné (0.80 au lieu de 0.50) révèle un écart de montant.
+        CurrencyRateRepository(session).set_rate("USD", Decimal("0.80"))
+        supplier, po, invoice = _build_context(
+            session,
+            po_currency="EUR",
+            invoice_currency="USD",
+            po_total="461.25",
+            totals=("770.00", "152.50", "922.50"),
+            invoice_lines=[
+                {
+                    "line_number": 1, "description": "Câble HDMI",
+                    "product_ref": "CBL-001", "quantity": "10.0",
+                    "unit_price": "17.00", "tax_rate": "0.20", "amount": "170.00",
+                },
+                {
+                    "line_number": 2, "description": "Écran LED",
+                    "product_ref": "SCR-24", "quantity": "2.0",
+                    "unit_price": "300.00", "tax_rate": "0.20", "amount": "600.00",
+                },
+            ],
+        )
+        session.commit()
+
+        result = MatchingService(session).match(invoice)
+
+        assert any(a.category is AnomalyCategory.AMOUNT for a in result.anomalies)
+        assert result.score < 1.0
 
 
 class TestFallbackViaLinkedPo:

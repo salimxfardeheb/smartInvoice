@@ -1,9 +1,10 @@
 /** Tests du formulaire de dépôt (appel API mocké). */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { UploadForm } from "@/components/invoices/UploadForm";
+import { UploadForm, validateFile } from "@/components/invoices/UploadForm";
 import { api } from "@/lib/api-client";
+import type { Invoice } from "@/types";
 import { makeInvoice } from "./fixtures";
 
 jest.mock("@/lib/api-client", () => ({
@@ -68,5 +69,70 @@ describe("UploadForm", () => {
     await user.click(screen.getByRole("button", { name: "Déposer la facture" }));
 
     expect(await screen.findByText("Doublon détecté.")).toBeInTheDocument();
+  });
+
+  test("validateFile refuse un format non pris en charge", () => {
+    const bad = new File(["MZ"], "virus.exe", { type: "application/x-msdownload" });
+    expect(validateFile(bad)).toContain("Format non pris en charge");
+  });
+
+  test("validateFile refuse un fichier trop volumineux", () => {
+    const big = new File([new ArrayBuffer(21 * 1024 * 1024)], "large.pdf", {
+      type: "application/pdf",
+    });
+    expect(validateFile(big)).toContain("20 Mo maximum");
+  });
+
+  test("validateFile accepte un PDF valide", () => {
+    const ok = new File(["%PDF-1.4"], "facture.pdf", { type: "application/pdf" });
+    expect(validateFile(ok)).toBeNull();
+  });
+
+  test("affiche une erreur client quand le format est invalide", () => {
+    render(<UploadForm suppliers={[{ id: 42, name: "ACME SAS" }]} />);
+
+    const input = screen.getByLabelText("Document *");
+    const file = new File(["MZ"], "facture.exe", { type: "application/x-msdownload" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Format non pris en charge");
+    expect(screen.getByRole("button", { name: "Déposer la facture" })).toBeDisabled();
+  });
+
+  test("affiche un aperçu pour une image sélectionnée", async () => {
+    const user = userEvent.setup();
+    render(<UploadForm suppliers={[{ id: 42, name: "ACME SAS" }]} />);
+
+    const file = new File(["fake-image"], "facture.png", { type: "image/png" });
+    await user.upload(screen.getByLabelText("Document *"), file);
+
+    expect(screen.getByText(/Aperçu de facture\.png/)).toBeInTheDocument();
+    expect(screen.getByAltText("Aperçu du document facture.png")).toBeInTheDocument();
+  });
+
+  test("affiche la progression pendant l'envoi", async () => {
+    const user = userEvent.setup();
+    const onSuccess = jest.fn();
+    let resolve!: (invoice: Invoice) => void;
+    mockedApi.depositInvoice.mockImplementation((_form, onProgress) => {
+      onProgress?.(40);
+      return new Promise<Invoice>((res) => {
+        resolve = res;
+      });
+    });
+
+    render(<UploadForm onSuccess={onSuccess} suppliers={[{ id: 42, name: "ACME SAS" }]} />);
+
+    const file = new File(["%PDF-1.4"], "facture.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByLabelText("Document *"), file);
+    await user.type(screen.getByLabelText("Numéro de facture *"), "FAC-2026-099");
+    await user.selectOptions(screen.getByLabelText("Fournisseur *"), "42");
+    await user.click(screen.getByRole("button", { name: "Déposer la facture" }));
+
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    expect(screen.getByText(/Envoi : 40 %/)).toBeInTheDocument();
+
+    resolve(makeInvoice({ id: 9 }));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith(makeInvoice({ id: 9 })));
   });
 });

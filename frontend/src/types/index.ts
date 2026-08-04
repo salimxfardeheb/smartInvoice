@@ -198,6 +198,104 @@ export interface DashboardSummary {
   pending_anomalies: PendingAnomaly[];
 }
 
+/** Anomalie complète renvoyée par l'API (avec état de résolution). */
+export interface Anomaly {
+  id: number;
+  invoice_id: number;
+  invoice_number: string;
+  supplier_name: string | null;
+  category: AnomalyCategory;
+  severity: AnomalySeverity;
+  message: string;
+  expected_value: string | null;
+  actual_value: string | null;
+  resolved: boolean;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export interface AnomalyListResponse {
+  items: Anomaly[];
+  total: number;
+}
+
+/** Filtres de la liste des anomalies. */
+export interface AnomalyFilters {
+  resolved?: boolean;
+  severity?: AnomalySeverity;
+  category?: AnomalyCategory;
+  invoice_id?: number;
+}
+
+/** Corps de création d'un utilisateur (POST /api/users). */
+export interface UserCreatePayload {
+  username: string;
+  email: string;
+  password: string;
+  full_name?: string;
+  role?: UserRole;
+}
+
+/** Corps de mise à jour d'un utilisateur (PATCH /api/users/{id}). */
+export interface UserUpdatePayload {
+  full_name?: string;
+  email?: string;
+  role?: UserRole;
+  is_active?: boolean;
+}
+
+/** Fournisseur du catalogue (lecture). */
+export interface SupplierRead {
+  id: number;
+  odoo_id: number | null;
+  name: string;
+  vat: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  is_active: boolean;
+}
+
+/** Bon de commande du catalogue (lecture). */
+export interface PurchaseOrderRead {
+  id: number;
+  odoo_id: number | null;
+  reference: string;
+  supplier_id: number | null;
+  state: string | null;
+  currency: string | null;
+  date_order: string | null;
+  total_amount: string | null;
+  supplier: SupplierRead | null;
+}
+
+/** Résultat de la synchronisation d'un fournisseur. */
+export interface SupplierSyncResult {
+  synced: boolean;
+  supplier: SupplierRead;
+}
+
+/** Résultat de la synchronisation d'un bon de commande. */
+export interface PurchaseOrderSyncResult {
+  synced: boolean;
+  purchase_order: PurchaseOrderRead;
+}
+
+export type TaskState = "en attente" | "en cours" | "réussi" | "échoué";
+
+/** Tâche asynchrone (OCR / ré-analyse) renvoyée par /api/tasks. */
+export interface OcrTask {
+  id: number;
+  kind: string;
+  state: TaskState;
+  invoice_id: number | null;
+  error_message: string | null;
+  result: Record<string, unknown> | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
 /** Filtres de la liste des factures (sous-ensemble de l'API). */
 export interface InvoiceFilters {
   status?: InvoiceStatus;

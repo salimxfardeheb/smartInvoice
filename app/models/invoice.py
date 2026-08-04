@@ -105,6 +105,13 @@ class Invoice(Base, TimestampMixin):
     vendor_bill_id: Mapped[int | None] = mapped_column(
         BigInteger
     )  # id de la account.move Odoo (phase 7)
+    # Suivi des tentatives de création de la Vendor Bill Odoo (phase 7bis) :
+    # un échec côté Odoo laisse la facture « Validée » et incrémente le compteur
+    # afin de pouvoir retenter sans perdre l'information de l'erreur commise.
+    vendor_bill_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    vendor_bill_error: Mapped[str | None] = mapped_column(Text)
     file_path: Mapped[str | None] = mapped_column(String(500))
     original_filename: Mapped[str | None] = mapped_column(String(255))
     content_type: Mapped[str | None] = mapped_column(String(100))
