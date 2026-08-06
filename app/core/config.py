@@ -89,11 +89,27 @@ class Settings(BaseSettings):
     jwt_legacy_secrets: str = ""
 
     # --- Rate limiting de l'authentification (brute force)
-    rate_limit_enabled: bool = False
+    #
+    # Actif par défaut : une instance exposée sans limitation laisse ``/login``
+    # et ``/refresh`` ouverts au bourrinage. Se désactive explicitement par
+    # ``RATE_LIMIT_ENABLED=false`` (utile en test de charge ou en local).
+    #
+    # ATTENTION — compteur **en mémoire du processus** (voir ``core/ratelimit``) :
+    # avec plusieurs workers Uvicorn, chaque worker tient son propre compteur et
+    # la limite effective est multipliée par le nombre de workers. Lancer l'API
+    # avec ``--workers 1`` (cf. README, « Démarrage ») tant que le limiteur n'est
+    # pas déporté sur un stockage partagé (Redis).
+    rate_limit_enabled: bool = True
     rate_limit_max: int = 20
     rate_limit_window_seconds: int = 60
 
     # --- File asynchrone des jobs OCR
+    #
+    # ATTENTION — pool de threads **in-process** (voir ``services/task_manager``) :
+    # les jobs vivent dans le processus qui a reçu la requête et ne survivent pas
+    # à un redémarrage (les tâches orphelines sont neutralisées au démarrage par
+    # ``services/startup_recovery``). Monter en charge via ce réglage, pas via le
+    # nombre de workers Uvicorn.
     task_queue_workers: int = 2
 
     @model_validator(mode="after")

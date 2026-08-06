@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401
 from app.db.base import Base
 
-HEAD = "0008_odoo_hardening"
+HEAD = "0009_add_task_interrupted_action"
 
 EXPECTED_TABLES = {
     "users",
@@ -79,6 +79,74 @@ class TestMigrations:
             raise AssertionError("Le doublon (fournisseur, numéro) aurait dû être rejeté")
         except Exception as exc:  # IntegrityError / sqlite3.IntegrityError
             assert "UNIQUE" in str(exc).upper() or "INTEGRITY" in str(exc).upper()
+        finally:
+            session.close()
+
+    def test_upgrade_allows_task_interrupted_audit_action(
+        self, migrated_engine
+    ) -> None:
+        """La 0009 doit autoriser « tâche_interrompue » dans le CHECK d'audit.
+
+        C'est l'objet même de la migration : la reprise au démarrage écrit
+        cette action, et la parité de schéma ne contrôle pas les contraintes.
+        """
+        Session = sessionmaker(bind=migrated_engine)
+        session = Session()
+        try:
+            session.execute(
+                text("INSERT INTO suppliers (odoo_id, name) VALUES (9, 'ACME')")
+            )
+            session.execute(
+                text(
+                    "INSERT INTO invoices (invoice_number, supplier_id) "
+                    "VALUES ('FAC-009', 1)"
+                )
+            )
+            session.execute(
+                text(
+                    "INSERT INTO audit_logs (invoice_id, user_id, action, message) "
+                    "VALUES (1, NULL, 'tâche_interrompue', 'reprise')"
+                )
+            )
+            session.commit()
+
+            stored = session.execute(
+                text("SELECT action, user_id FROM audit_logs")
+            ).one()
+            assert stored[0] == "tâche_interrompue"
+            # Action système : la trace ne porte aucun utilisateur.
+            assert stored[1] is None
+        finally:
+            session.close()
+
+    def test_upgrade_still_rejects_unknown_audit_action(
+        self, migrated_engine
+    ) -> None:
+        """Le CHECK reste fermé : la 0009 élargit la liste, ne la supprime pas."""
+        Session = sessionmaker(bind=migrated_engine)
+        session = Session()
+        try:
+            session.execute(
+                text("INSERT INTO suppliers (odoo_id, name) VALUES (9, 'ACME')")
+            )
+            session.execute(
+                text(
+                    "INSERT INTO invoices (invoice_number, supplier_id) "
+                    "VALUES ('FAC-010', 1)"
+                )
+            )
+            session.commit()
+            try:
+                session.execute(
+                    text(
+                        "INSERT INTO audit_logs (invoice_id, action, message) "
+                        "VALUES (1, 'action_inconnue', 'nope')"
+                    )
+                )
+                session.commit()
+                raise AssertionError("Une action inconnue aurait dû être rejetée")
+            except Exception as exc:
+                assert "CHECK" in str(exc).upper() or "CONSTRAINT" in str(exc).upper()
         finally:
             session.close()
 

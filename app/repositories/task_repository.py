@@ -74,3 +74,13 @@ class TaskRepository(BaseRepository[Task]):
         """Compte les tâches dans un état donné (utile pour les métriques)."""
         stmt = select(func.count(Task.id)).where(Task.state == state)
         return int(self.session.scalar(stmt) or 0)
+
+    def list_by_state(self, state: TaskState) -> list[Task]:
+        """Retourne toutes les tâches d'un état donné, des plus anciennes d'abord.
+
+        Utilisé par la reprise au démarrage
+        (:mod:`app.services.startup_recovery`) pour retrouver les tâches
+        laissées « en cours » par un arrêt du serveur.
+        """
+        stmt = select(Task).where(Task.state == state).order_by(Task.id)
+        return list(self.session.scalars(stmt))

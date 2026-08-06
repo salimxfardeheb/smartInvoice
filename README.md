@@ -294,8 +294,8 @@ JWT_LEGACY_SECRETS=            # anciennes clés encore acceptées en décodage 
 CORS_ORIGINS=                  # ex. https://app.exemple.com,https://admin.exemple.com
 
 # --- Rate limiting de l'authentification (anti-brute-force) ---
-RATE_LIMIT_ENABLED=false
-RATE_LIMIT_MAX=20
+RATE_LIMIT_ENABLED=true        # ACTIF par défaut ; "false"/"0"/"no" pour désactiver
+RATE_LIMIT_MAX=20              # tentatives autorisées par fenêtre et par (utilisateur, IP)
 RATE_LIMIT_WINDOW_SECONDS=60
 
 # --- Stockage ---
@@ -312,7 +312,8 @@ OCR_MAX_PAGES=50               # garde-fou : pages analysées au maximum
 OCR_PIPELINE_TIMEOUT_SECONDS=300
 
 # --- File de tâches asynchrones ---
-TASK_QUEUE_WORKERS=2           # threads du pool de jobs OCR
+TASK_QUEUE_WORKERS=2           # threads du pool de jobs OCR — c'est CE réglage
+                               # qu'on augmente, pas le nombre de workers Uvicorn
 
 # --- Odoo (laisser vide désactive la synchronisation) ---
 ODOO_URL=http://odoo.local:8069
@@ -361,11 +362,37 @@ alembic upgrade head
 
 ```bash
 source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000          # développement
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1   # production
 ```
 
 - API : http://localhost:8000
 - Documentation interactive Swagger : http://localhost:8000/docs
+
+> ### ⚠️ Lancer l'API avec **un seul worker** (`--workers 1`)
+>
+> Trois composants sont des singletons **en mémoire du processus** :
+>
+> | Composant | Module | Conséquence avec plusieurs workers |
+> | --- | --- | --- |
+> | Limiteur anti-brute-force | `app/core/ratelimit.py` | Chaque worker tient son propre compteur : la limite effective devient `RATE_LIMIT_MAX × nombre de workers`. |
+> | File de jobs OCR | `app/services/task_manager.py` | Le pool de threads est propre au worker qui a reçu la requête ; aucune file partagée, aucune reprise entre workers. |
+> | Registre de métriques | `app/core/metrics.py` | Un scrape de `/metrics` ne renvoie que les compteurs du worker interrogé — les séries sont partielles et incohérentes d'un scrape à l'autre. |
+>
+> **Pour absorber plus de charge OCR, augmente `TASK_QUEUE_WORKERS`** (threads
+> du pool, dans le même processus), pas le nombre de workers Uvicorn. La même
+> règle vaut pour un déploiement conteneurisé : **une seule réplique** de l'API
+> tant que ces trois composants ne sont pas déportés sur un stockage partagé
+> (Redis).
+
+**Reprise au démarrage.** Les jobs OCR ne survivent pas à un arrêt du serveur.
+À chaque démarrage, l'application balaye les tâches restées « en cours »
+(`app/services/startup_recovery.py`) : elles passent à « échoué », et les
+factures bloquées en « En cours d'analyse » repassent en « Erreur système »,
+état depuis lequel `POST /api/invoices/{id}/retry` est accepté. Chaque reprise
+est tracée dans le journal d'audit sous l'action `tâche_interrompue`, sans
+utilisateur. Si la base est injoignable au démarrage, l'application démarre
+quand même et l'incident est journalisé.
 
 ### Frontend
 
@@ -598,7 +625,7 @@ et le frontend double le contrôle côté UI avec `RequireAuth` / `RequireRole`.
 
 ```bash
 source .venv/bin/activate
-python -m pytest                     # 435 tests, ~95 s
+python -m pytest                     # 454 tests, ~100 s
 python -m pytest --cov=app           # couverture globale 95 %
 ```
 

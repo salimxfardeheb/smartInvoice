@@ -67,3 +67,16 @@ def get_limiter() -> SlidingWindowLimiter | None:
                 settings.rate_limit_max, settings.rate_limit_window_seconds
             )
         return _limiter
+
+
+def reset_limiter() -> None:
+    """Réinitialise le limiteur partagé (compteurs vidés).
+
+    Le limiteur étant un singleton de processus, ses compteurs survivraient
+    d'un test à l'autre au sein d'une même exécution : les tests le
+    réinitialisent entre chaque cas pour repartir de l'état d'un processus
+    fraîchement démarré.
+    """
+    global _limiter
+    with _limiter_lock:
+        _limiter = None

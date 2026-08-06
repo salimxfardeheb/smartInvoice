@@ -78,6 +78,9 @@ class AuditAction(str, enum.Enum):
     VENDOR_BILL_CREATED = "vendor_bill_créée"
     CONFIRMED = "confirmation_acheteur"  # confirmation quantités/produits (Acheteur)
     REPROCESSED = "re_analyse"  # relance d'une facture en « Erreur système »
+    # Action « système » (aucun utilisateur) : une tâche laissée en cours par un
+    # arrêt du serveur a été neutralisée au démarrage suivant.
+    TASK_INTERRUPTED = "tâche_interrompue"
 
 
 class TaskState(str, enum.Enum):

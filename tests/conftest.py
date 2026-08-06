@@ -32,6 +32,22 @@ def _enable_foreign_keys(dbapi_connection, _record) -> None:  # pragma: no cover
     cursor.close()
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> Iterator[None]:
+    """Repart d'un limiteur vierge à chaque test.
+
+    Le limiteur anti-brute-force est actif par défaut (``RATE_LIMIT_ENABLED``)
+    et vit dans un singleton de processus : sans réinitialisation, les
+    tentatives de connexion s'accumuleraient d'un test à l'autre et
+    finiraient par déclencher des 429 sans rapport avec le cas testé.
+    """
+    from app.core.ratelimit import reset_limiter
+
+    reset_limiter()
+    yield
+    reset_limiter()
+
+
 @pytest.fixture()
 def engine() -> Iterator[Engine]:
     """Moteur SQLite en mémoire avec schéma créé depuis les modèles."""
@@ -91,6 +107,10 @@ def client(engine: Engine):
     remplacé : les jobs asynchrones (OCR) s'exécutent **immédiatement** dans le
     thread d'appel (exécuteur inline) sur le moteur de test, ce qui rend les
     tests déterministes sans réels threads.
+
+    La fabrique de sessions est aussi passée à ``create_app`` : la reprise au
+    démarrage (``lifespan``) balaye ainsi le moteur de test et non la base
+    définie par ``DATABASE_URL``.
     """
     from fastapi.testclient import TestClient
 
@@ -98,8 +118,8 @@ def client(engine: Engine):
     from app.main import create_app
     from app.services.task_manager import InlineExecutor, TaskManager
 
-    app = create_app()
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    app = create_app(session_factory=session_factory)
 
     def override_get_db() -> Iterator[Session]:
         db = session_factory()

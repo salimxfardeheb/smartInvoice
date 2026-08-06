@@ -2,13 +2,27 @@
 
 Point d'entrée : ``uvicorn app.main:app``. Les exceptions métier définies
 dans ``app.core.exceptions`` sont traduites ici en réponses HTTP.
+
+.. warning::
+   L'API doit être lancée avec **un seul worker** (``uvicorn --workers 1``).
+   Le limiteur de débit (``core/ratelimit``), la file de jobs OCR
+   (``services/task_manager``) et le registre de métriques (``core/metrics``)
+   sont des singletons **en mémoire du processus** : avec plusieurs workers, la
+   limite anti-brute-force est multipliée par leur nombre et ``/metrics`` ne
+   renvoie que les compteurs du worker interrogé. Monter en charge via
+   ``TASK_QUEUE_WORKERS`` (threads), pas via le nombre de workers Uvicorn.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 from app.api.routes import (
     anomalies,
@@ -34,12 +48,74 @@ from app.core.exceptions import (
 )
 
 
-def create_app() -> FastAPI:
-    """Fabrique l'application FastAPI (tests inclus)."""
+logger = logging.getLogger(__name__)
+
+SessionFactory = Callable[[], Session]
+
+
+def _build_lifespan(session_factory: SessionFactory | None):
+    """Construit le gestionnaire de cycle de vie de l'application.
+
+    Au démarrage, neutralise les tâches laissées « en cours » par un arrêt du
+    serveur (voir :mod:`app.services.startup_recovery`). Le rapport est exposé
+    sur ``app.state.recovery_report`` à des fins de diagnostic.
+
+    ``session_factory`` permet aux tests de viser leur propre moteur ; en
+    production, ``SessionLocal`` est résolu paresseusement au démarrage.
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        from app.services.startup_recovery import (
+            RecoveryReport,
+            recover_orphan_tasks,
+        )
+
+        factory = session_factory
+        if factory is None:
+            from app.db.session import SessionLocal
+
+            factory = SessionLocal
+
+        app.state.recovery_report = RecoveryReport()
+        try:
+            with factory() as session:
+                report = recover_orphan_tasks(session)
+                session.commit()
+            app.state.recovery_report = report
+            if not report.is_empty:
+                logger.warning(
+                    "Reprise au démarrage : %s tâche(s) interrompue(s) "
+                    "neutralisée(s), %s facture(s) débloquée(s) en « Erreur "
+                    "système ».",
+                    report.tasks_failed,
+                    report.invoices_recovered,
+                )
+        except Exception:  # noqa: BLE001 - le démarrage ne doit pas échouer ici
+            # Base injoignable ou schéma absent : on démarre quand même, les
+            # requêtes échoueront explicitement plutôt que de bloquer le
+            # déploiement sur un incident transitoire.
+            logger.exception(
+                "Reprise au démarrage impossible : des tâches peuvent rester "
+                "« en cours » et des factures bloquées en « En cours d'analyse »."
+            )
+
+        yield
+
+    return lifespan
+
+
+def create_app(*, session_factory: SessionFactory | None = None) -> FastAPI:
+    """Fabrique l'application FastAPI (tests inclus).
+
+    ``session_factory`` n'est utilisée que par la reprise au démarrage ; les
+    requêtes HTTP passent, elles, par la dépendance ``get_db``.
+    """
     app = FastAPI(
         title="SmartInvoice API",
         description="OCR & rapprochement automatique des factures fournisseurs.",
         version="0.4.0",
+        lifespan=_build_lifespan(session_factory),
     )
 
     settings = get_settings()
