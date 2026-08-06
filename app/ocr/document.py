@@ -8,6 +8,7 @@ au moteur OCR. Une image (JPG/JPEG/PNG) est utilisée telle quelle.
 from __future__ import annotations
 
 import io
+import logging
 
 from PIL import Image, UnidentifiedImageError
 
@@ -15,6 +16,8 @@ from app.core.config import get_settings
 from app.core.exceptions import DocumentNotFoundError, OcrEngineError
 from app.models.invoice import Invoice
 from app.storage.base import Storage
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentLoader:
@@ -30,6 +33,11 @@ class DocumentLoader:
         :class:`OcrEngineError` si le rendu échoue.
         """
         if invoice.file_path is None or not self.storage.exists(invoice.file_path):
+            logger.error(
+                "Document : fichier source introuvable pour la facture %s (%s).",
+                invoice.id,
+                invoice.file_path,
+            )
             raise DocumentNotFoundError(
                 "Le fichier source de la facture est introuvable."
             )
@@ -47,6 +55,7 @@ class DocumentLoader:
         try:
             document = pdfium.PdfDocument(content)
         except Exception as exc:
+            logger.error("Document : PDF illisible : %s", exc, exc_info=True)
             raise OcrEngineError("Impossible d'ouvrir le PDF pour l'analyse.") from exc
 
         try:
@@ -55,6 +64,11 @@ class DocumentLoader:
             page_count = None
         if page_count is not None and page_count > max_pages:
             document.close()
+            logger.warning(
+                "Document : PDF refusé, %s pages (maximum %s).",
+                page_count,
+                max_pages,
+            )
             raise OcrEngineError(
                 f"Document trop volumineux ({page_count} pages, maximum {max_pages})."
             )
@@ -65,6 +79,7 @@ class DocumentLoader:
                 bitmap = page.render(scale=dpi / 72)
                 images.append(bitmap.to_pil().convert("RGB"))
         except Exception as exc:
+            logger.error("Document : rendu du PDF impossible : %s", exc, exc_info=True)
             raise OcrEngineError(
                 "Impossible de rendre le PDF en images."
             ) from exc
@@ -79,4 +94,5 @@ class DocumentLoader:
             with Image.open(io.BytesIO(content)) as image:
                 return [image.convert("RGB")]
         except UnidentifiedImageError as exc:
+            logger.error("Document : image illisible : %s", exc, exc_info=True)
             raise OcrEngineError("L'image du document est illisible.") from exc

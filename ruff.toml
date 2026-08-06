@@ -1,0 +1,17 @@
+# Configuration du linter Python (utilisé en local et par la CI).
+#
+# Le jeu de règles est volontairement celui par défaut de ruff — pyflakes (F)
+# et le sous-ensemble sûr de pycodestyle (E4 imports, E7 syntaxe, E9 erreurs) —
+# afin que le lint signale des défauts réels et non des écarts de style. En
+# particulier E501 (longueur de ligne) n'est pas activé.
+
+target-version = "py312"
+line-length = 88
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# Les migrations sont générées par Alembic : leur en-tête suit un gabarit
+# (revision identifiers, imports non systématiquement utilisés).
+"alembic/versions/*.py" = ["F401"]

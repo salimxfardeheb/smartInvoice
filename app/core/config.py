@@ -112,6 +112,14 @@ class Settings(BaseSettings):
     # nombre de workers Uvicorn.
     task_queue_workers: int = 2
 
+    # --- Logging applicatif
+    #
+    # Niveau du logger racine (DEBUG/INFO/WARNING/ERROR/CRITICAL). ``INFO`` par
+    # défaut : trace le déroulement du pipeline OCR, des tâches asynchrones et
+    # de la synchronisation Odoo sans le bruit des requêtes SQL (``echo_sql``
+    # les active séparément).
+    log_level: str = "INFO"
+
     @model_validator(mode="after")
     def _reject_default_secret_in_production(self) -> Settings:
         """Refuse la clé JWT par défaut en production."""

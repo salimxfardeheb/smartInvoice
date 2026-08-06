@@ -29,6 +29,7 @@ from app.api.routes import (
     auth,
     catalog,
     config,
+    health,
     invoices,
     metrics,
     odoo,
@@ -46,6 +47,7 @@ from app.core.exceptions import (
     RateLimitExceededError,
     UserAlreadyExistsError,
 )
+from app.core.logging_config import configure_logging
 
 
 logger = logging.getLogger(__name__)
@@ -111,6 +113,8 @@ def create_app(*, session_factory: SessionFactory | None = None) -> FastAPI:
     ``session_factory`` n'est utilisée que par la reprise au démarrage ; les
     requêtes HTTP passent, elles, par la dépendance ``get_db``.
     """
+    configure_logging()
+
     app = FastAPI(
         title="SmartInvoice API",
         description="OCR & rapprochement automatique des factures fournisseurs.",
@@ -144,6 +148,7 @@ def create_app(*, session_factory: SessionFactory | None = None) -> FastAPI:
     )
     app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
     app.include_router(metrics.router, prefix="", tags=["monitoring"])
+    app.include_router(health.router, prefix="", tags=["monitoring"])
 
     @app.exception_handler(AuthenticationError)
     async def _handle_authentication(

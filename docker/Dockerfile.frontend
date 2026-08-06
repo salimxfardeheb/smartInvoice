@@ -1,0 +1,56 @@
+# Image de production de l'interface SmartInvoice (Next.js 14).
+#
+# Construction depuis la racine du dépôt :
+#   docker build -f docker/Dockerfile.frontend -t smartinvoice-frontend .
+#
+# Build multi-étapes : les dépendances de développement (TypeScript, ESLint,
+# Jest) restent dans les étapes intermédiaires. L'image finale ne contient que
+# la sortie `standalone` de Next.js — le serveur et les seuls modules
+# réellement importés.
+
+# --- Étape 1 : dépendances --------------------------------------------------
+FROM node:20-alpine AS deps
+
+WORKDIR /app
+
+# `npm ci` exige un lockfile et garantit une installation reproductible.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+# --- Étape 2 : build --------------------------------------------------------
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY frontend/ ./
+
+# Télémétrie désactivée : un build CI ne doit pas émettre d'appel sortant.
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# --- Étape 3 : exécution ----------------------------------------------------
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+# Compte non privilégié (le groupe `node` existe déjà dans l'image de base).
+RUN addgroup -g 1001 -S nodejs \
+    && adduser -u 1001 -S nextjs -G nodejs
+
+# `standalone` embarque server.js et ses dépendances ; les fichiers statiques
+# et le dossier public restent à copier séparément (Next.js ne les inclut pas).
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+
+USER nextjs
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

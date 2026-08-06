@@ -1,0 +1,67 @@
+# Contexte de build : les deux images sont construites depuis la racine du
+# dépôt. Tout ce qui est exclu ici n'est ni envoyé au démon Docker ni copié
+# par un COPY, ce qui accélère le build et évite d'embarquer des secrets.
+
+# --- Secrets et configuration locale ---------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Git et métadonnées ------------------------------------------------------
+.git
+.gitignore
+.github
+.gitattributes
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage/
+htmlcov/
+*.sqlite3
+
+# Les tests et l'outillage de dev ne partent pas en production.
+tests/
+pytest.ini
+requirements-dev.txt
+
+# --- Node / Next.js ----------------------------------------------------------
+# node_modules est réinstallé par `npm ci` dans l'image : copier celui de
+# l'hôte casserait les binaires natifs et alourdirait le contexte.
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/coverage/
+frontend/tests/
+frontend/jest.config.js
+frontend/jest.setup.js
+
+# --- Données applicatives ----------------------------------------------------
+# Les documents déposés vivent dans un volume, jamais dans l'image.
+storage/
+datasets/
+
+# --- Docker ------------------------------------------------------------------
+docker-compose.yml
+docker-compose.*.yml
+.dockerignore
+
+# --- Documentation et divers -------------------------------------------------
+docs/
+odoo/
+scripts/
+*.md
+!README.md
+.vscode/
+.idea/
+.claude/
+*.log
+.DS_Store

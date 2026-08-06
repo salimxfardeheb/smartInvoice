@@ -8,12 +8,16 @@ convertie en ``numpy.ndarray`` pour ``predict``.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from PIL import Image
 
 from app.core.config import get_settings
 from app.core.exceptions import OcrEngineError
 from app.ocr.base import OcrEngine, OcrResult
+
+logger = logging.getLogger(__name__)
 
 
 class PaddleOcrEngine(OcrEngine):
@@ -26,6 +30,7 @@ class PaddleOcrEngine(OcrEngine):
     def _get_predictor(self):
         """Instancie PaddleOCR une seule fois (coûteux)."""
         if self._ocr is None:
+            logger.info("PaddleOCR : initialisation du moteur (langue %s).", self.lang)
             try:
                 from paddleocr import PaddleOCR
 
@@ -36,9 +41,13 @@ class PaddleOcrEngine(OcrEngine):
                     use_textline_orientation=False,
                 )
             except Exception as exc:  # échec d'initialisation / téléchargement
+                logger.error(
+                    "PaddleOCR : initialisation impossible : %s", exc, exc_info=True
+                )
                 raise OcrEngineError(
                     f"Impossible d'initialiser PaddleOCR : {exc}"
                 ) from exc
+            logger.info("PaddleOCR : moteur initialisé.")
         return self._ocr
 
     def recognize(self, image: Image.Image) -> OcrResult:
@@ -50,6 +59,9 @@ class PaddleOcrEngine(OcrEngine):
         except OcrEngineError:
             raise
         except Exception as exc:  # tout autre échec d'inférence
+            logger.error(
+                "PaddleOCR : échec de la reconnaissance : %s", exc, exc_info=True
+            )
             raise OcrEngineError(f"Échec de la reconnaissance OCR : {exc}") from exc
 
         texts: list[str] = []
@@ -60,4 +72,6 @@ class PaddleOcrEngine(OcrEngine):
                 continue
             texts.extend(str(t) for t in payload.get("rec_texts", []))
             scores.extend(float(s) for s in payload.get("rec_scores", []))
+        if not texts:
+            logger.warning("PaddleOCR : aucun texte reconnu sur la page.")
         return OcrResult(texts=texts, scores=scores, page_index=0)

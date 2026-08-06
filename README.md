@@ -158,7 +158,7 @@ smartInvoice/
 ├── datasets/                     # Factures d'exemple FR/EN + generate_samples.py
 ├── scripts/                      # sync_odoo.py (synchronisation périodique, cron)
 ├── odoo/                         # Config serveur + addon smartinvoice_bridge (squelette)
-├── docker/                       # Fichiers Docker (à faire, voir AUDIT.md)
+├── docker/                       # Dockerfile.backend, Dockerfile.frontend, entrypoint
 └── storage/                      # Stockage local des documents (racine par défaut)
 ```
 
@@ -261,12 +261,19 @@ Erreur système ◄──────────────────── 
 python -m venv .venv
 source .venv/bin/activate
 
-# Dépendances
+# Dépendances applicatives
 pip install -r requirements.txt
+
+# …ou, pour développer (ajoute pytest et ruff)
+pip install -r requirements-dev.txt
 
 # Base de données
 createdb smartinvoice   # ou via psql
 ```
+
+> `requirements.txt` ne contient que les dépendances d'exécution : c'est ce que
+> l'image Docker installe. L'outillage de test et de lint vit dans
+> `requirements-dev.txt`.
 
 ### Frontend
 
@@ -404,6 +411,33 @@ npm run dev        # http://localhost:3000
 Les appels `/api/*` du navigateur sont proxifiés vers le backend
 (`http://localhost:8000` par défaut, variable `API_BASE_URL` dans
 `frontend/next.config.mjs`) — aucune configuration CORS n'est nécessaire.
+
+### Avec Docker
+
+```bash
+cp .env.example .env        # puis renseigner JWT_SECRET_KEY
+docker compose up --build
+```
+
+Trois services démarrent en cascade, chacun attendant que le précédent soit
+*sain* (`depends_on: condition: service_healthy`) : `db` (PostgreSQL 16) →
+`backend` → `frontend`. Les migrations Alembic sont appliquées par
+l'entrypoint du backend avant le lancement d'Uvicorn.
+
+| Volume | Contenu |
+| --- | --- |
+| `postgres_data` | Données PostgreSQL |
+| `storage_data` | Documents déposés (`/app/storage`) |
+
+> **Premier build long.** L'image backend précharge les modèles PaddleOCR
+> (`docker/Dockerfile.backend`) : plusieurs centaines de Mo sont téléchargées
+> pendant le `build`, et non au premier appel OCR en production. C'est
+> volontaire — sans cela, la première facture analysée semble bloquée, et
+> échoue si l'hôte n'a pas d'accès sortant.
+
+`JWT_SECRET_KEY` est obligatoire : les conteneurs tournent avec
+`ENVIRONMENT=production`, et l'API refuse de démarrer avec la clé de
+développement par défaut.
 
 ---
 
@@ -670,12 +704,10 @@ Couverture frontend : 78 % instructions / 63 % branches (les `lib/*` et
 
 Ces limites sont détaillées, avec leur correctif envisagé, dans `AUDIT.md`.
 
-- **Déploiement non finalisé** : `docker-compose.yml` est vide, aucun
-  `Dockerfile`, aucune CI. C'est le principal bloquant pour une mise en
-  production.
-- **Pas de logging applicatif** ni d'endpoint de santé (`/healthz`). Les
-  métriques Prometheus existent, mais un job OCR qui échoue en arrière-plan ne
-  laisse aucune trace exploitable.
+- **Déploiement à éprouver** : la pile Docker (`docker compose up --build`) et
+  la CI GitHub Actions existent mais n'ont pas encore tourné sur une machine
+  disposant de Docker — le premier build, qui précharge les modèles PaddleOCR,
+  reste à valider.
 - **Mono-instance** : la file de tâches et le rate limiter vivent en mémoire du
   processus. Pas de reprise des tâches après un crash, pas de compteur partagé
   entre répliques — une migration Redis + Celery/RQ sera nécessaire pour

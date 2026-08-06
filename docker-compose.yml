@@ -1,0 +1,100 @@
+# Pile SmartInvoice complète : base PostgreSQL, API FastAPI, interface Next.js.
+#
+#   docker compose up --build
+#
+# Les secrets sont lus dans le fichier `.env` de la racine (interpolation
+# Compose). `JWT_SECRET_KEY` est obligatoire : l'API refuse de démarrer en
+# ENVIRONMENT=production avec la clé de développement par défaut.
+
+name: smartinvoice
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-smartinvoice}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smartinvoice}
+      POSTGRES_DB: ${POSTGRES_DB:-smartinvoice}
+      # Les données vivent dans le volume, pas dans la couche du conteneur.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # `-d` et `-U` explicites : sans eux, pg_isready interroge la base
+      # « postgres » et répondrait « prêt » avant la création de la nôtre.
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smartinvoice} -d ${POSTGRES_DB:-smartinvoice}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-smartinvoice}:${POSTGRES_PASSWORD:-smartinvoice}@db:5432/${POSTGRES_DB:-smartinvoice}
+      # Obligatoire : l'API refuse de démarrer avec la clé par défaut en
+      # production (app/core/config.py).
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY doit être défini (voir .env)}
+      STORAGE_ROOT: /app/storage
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      TASK_QUEUE_WORKERS: ${TASK_QUEUE_WORKERS:-2}
+      # OCR
+      OCR_ENGINE: ${OCR_ENGINE:-paddle}
+      OCR_LANG: ${OCR_LANG:-fr}
+      # Odoo : laisser vide désactive la synchronisation.
+      ODOO_URL: ${ODOO_URL:-}
+      ODOO_DB: ${ODOO_DB:-}
+      ODOO_USERNAME: ${ODOO_USERNAME:-}
+      ODOO_PASSWORD: ${ODOO_PASSWORD:-}
+      ODOO_API_KEY: ${ODOO_API_KEY:-}
+    volumes:
+      # Les factures déposées survivent à la reconstruction de l'image.
+      - storage_data:/app/storage
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      # Sonde applicative : vérifie la base et le stockage, pas seulement que
+      # le port répond (app/api/routes/health.py).
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Laisse le temps aux migrations Alembic de s'appliquer au démarrage.
+      start_period: 60s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      # Lu au démarrage du serveur Next par next.config.mjs, qui proxifie
+      # /api/* vers l'API : variable d'exécution, pas d'argument de build.
+      API_BASE_URL: http://backend:8000
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    healthcheck:
+      # L'image Node n'embarque pas curl : on utilise le fetch global (Node 20).
+      test:
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:
+  storage_data:

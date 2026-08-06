@@ -21,6 +21,7 @@ retourné (aucune exception n'est levée pour ces cas attendus).
 from __future__ import annotations
 
 import io
+import logging
 import time
 
 from PIL import Image
@@ -56,6 +57,8 @@ from app.storage.base import Storage
 # Erreurs « attendues » du pipeline : elles marquent la facture en erreur
 # système et le pipeline se termine proprement.
 _EXPECTED_ERRORS = (DocumentIllegibleError, DocumentNotFoundError, OcrEngineError)
+
+logger = logging.getLogger(__name__)
 
 
 class OcrService:
@@ -102,16 +105,46 @@ class OcrService:
             self.invoice_service.transition_status(invoice, InvoiceStatus.SUBMITTED)
         self.invoice_service.transition_status(invoice, InvoiceStatus.ANALYZING)
 
+        logger.info(
+            "OCR : début de l'analyse de la facture %s (moteur %s).",
+            invoice.id,
+            type(self.engine).__name__,
+        )
+        started = time.monotonic()
         try:
             result, confidence, images = self._run(invoice)
         except _EXPECTED_ERRORS as exc:
+            logger.error(
+                "OCR : échec de l'analyse de la facture %s après %.2f s : %s",
+                invoice.id,
+                time.monotonic() - started,
+                exc,
+                exc_info=True,
+            )
             self.invoice_service.transition_status(
                 invoice, InvoiceStatus.SYSTEM_ERROR, reason=str(exc)
             )
             return invoice
+        except Exception:
+            logger.exception(
+                "OCR : erreur inattendue lors de l'analyse de la facture %s "
+                "après %.2f s.",
+                invoice.id,
+                time.monotonic() - started,
+            )
+            raise
 
         self._persist(invoice, result, confidence, images)
         self.invoice_service.transition_status(invoice, InvoiceStatus.TO_REVIEW)
+        logger.info(
+            "OCR : analyse de la facture %s terminée en %.2f s "
+            "(%s page(s), %s ligne(s), confiance %.1f%%).",
+            invoice.id,
+            time.monotonic() - started,
+            len(result.pages),
+            len(result.lines),
+            confidence * 100,
+        )
         return invoice
 
     def _run(self, invoice: Invoice) -> tuple[OcrExtraction, float, list[Image.Image]]:
@@ -121,6 +154,11 @@ class OcrService:
         exclues de l'extraction mais conservées comme preuve visuelle.
         """
         images = self.loader.load_images(invoice)
+        logger.info(
+            "OCR : facture %s, %s page(s) chargée(s) depuis le document.",
+            invoice.id,
+            len(images),
+        )
         deadline = time.monotonic() + get_settings().ocr_pipeline_timeout_seconds
         results: list[OcrResult] = []
         for image in images:
@@ -149,6 +187,14 @@ class OcrService:
                 if cleaned:
                     main_texts.append(cleaned)
                     main_scores.append(score)
+
+        annexes = sum(1 for page in pages if page.is_annex)
+        if annexes:
+            logger.info(
+                "OCR : facture %s, %s page(s) annexe(s) exclue(s) de l'extraction.",
+                invoice.id,
+                annexes,
+            )
 
         if not main_texts:
             raise DocumentIllegibleError(
@@ -266,6 +312,13 @@ class OcrService:
         """
         threshold = get_settings().ocr_confidence_threshold
         if confidence < threshold:
+            logger.warning(
+                "OCR : facture %s, confiance globale faible %.1f%% "
+                "(seuil %.0f%%) — anomalie qualité créée.",
+                invoice.id,
+                confidence * 100,
+                threshold * 100,
+            )
             self.anomalies.create(
                 invoice_id=invoice.id,
                 category=AnomalyCategory.OTHER,
@@ -279,6 +332,12 @@ class OcrService:
             return
         flagged = flag_low_confidence(result.confidence, confidence, threshold)
         if flagged:
+            logger.warning(
+                "OCR : facture %s, confiance insuffisante sur les champs "
+                "critiques : %s.",
+                invoice.id,
+                ", ".join(sorted(flagged)),
+            )
             self.anomalies.create(
                 invoice_id=invoice.id,
                 category=AnomalyCategory.OTHER,

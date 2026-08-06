@@ -3,11 +3,19 @@
 Les tests utilisent une base SQLite en mémoire isolée (``StaticPool``) et les
 contraintes d'intégrité référentielle sont activées via ``PRAGMA foreign_keys``
 afin de reproduire fidèlement le comportement PostgreSQL.
+
+La configuration est isolée dès l'import de ce module, **avant tout import
+applicatif** : ni le fichier ``.env`` du poste ni les variables
+d'environnement de la machine ne doivent influencer les tests. C'est une
+contrainte d'import et pas seulement de fixture, car ``app.db.session``
+construit son moteur au moment de l'import à partir de ``DATABASE_URL``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import os
+import tempfile
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -18,8 +26,48 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import app.models  # noqa: F401  (enregistre les modèles dans Base.metadata)
-from app.db.base import Base
+from app.core.config import Settings, get_settings
+
+# --- Isolation de la configuration ------------------------------------------
+
+# Valeurs fictives appliquées à toute la suite.
+_FAKE_ENV: dict[str, str] = {
+    "ENVIRONMENT": "test",
+    "DATABASE_URL": "sqlite://",
+    "JWT_SECRET_KEY": "test-only-secret-0123456789abcdef",
+    # Odoo est volontairement laissé « non configuré » : aucun test ne doit
+    # joindre un serveur réel, et les cas « configuration incomplète » (client
+    # Odoo, ``/healthz``) doivent être reproductibles sur tous les postes. Les
+    # tests qui ont besoin d'un Odoo configuré utilisent la fixture
+    # ``odoo_env`` ou passent les valeurs au constructeur.
+    "ODOO_URL": "",
+    "ODOO_DB": "",
+    "ODOO_USERNAME": "",
+    "ODOO_PASSWORD": "",
+    "ODOO_API_KEY": "",
+}
+
+
+def _isolate_settings() -> None:
+    """Neutralise le ``.env`` local et l'environnement hérité de la machine."""
+    # 1. Le fichier .env du poste ne doit pas être lu.
+    Settings.model_config["env_file"] = None
+    # 2. Toute variable d'environnement correspondant à un réglage est purgée
+    #    (pydantic-settings résout les noms sans tenir compte de la casse).
+    for field in Settings.model_fields:
+        os.environ.pop(field.upper(), None)
+        os.environ.pop(field.lower(), None)
+    # 3. Valeurs fictives déterministes, identiques d'un poste à l'autre.
+    os.environ.update(_FAKE_ENV)
+    # Les documents écrits par défaut atterrissent hors du dépôt.
+    os.environ["STORAGE_ROOT"] = tempfile.mkdtemp(prefix="smartinvoice-tests-")
+    get_settings.cache_clear()
+
+
+_isolate_settings()
+
+import app.models  # noqa: E402,F401  (enregistre les modèles dans Base.metadata)
+from app.db.base import Base  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,6 +78,48 @@ def _enable_foreign_keys(dbapi_connection, _record) -> None:  # pragma: no cover
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache() -> Iterator[None]:
+    """Repart d'une configuration fraîche à chaque test.
+
+    ``get_settings`` est mémoïsée (``lru_cache``) et plusieurs tests modifient
+    l'instance retournée (``monkeypatch.setattr(get_settings(), ...)``) ou les
+    variables d'environnement. Sans cette réinitialisation, le réglage modifié
+    fuiterait vers les tests suivants, dans un ordre dépendant de la collecte.
+    """
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture()
+def odoo_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Settings]]:
+    """Fabrique de configuration Odoo fictive, isolée du ``.env``.
+
+    Appeler la fixture applique un jeu complet de variables ``ODOO_*``
+    factices et retourne les réglages correspondants ; les valeurs peuvent
+    être surchargées une à une (``odoo_env(ODOO_URL="")`` pour simuler une
+    configuration incomplète).
+    """
+
+    def apply(**overrides: str) -> Settings:
+        values = {
+            "ODOO_URL": "http://odoo.test.invalid",
+            "ODOO_DB": "test-db",
+            "ODOO_USERNAME": "test-user",
+            "ODOO_PASSWORD": "test-password",
+            "ODOO_API_KEY": "",
+        }
+        values.update(overrides)
+        for key, value in values.items():
+            monkeypatch.setenv(key, value)
+        get_settings.cache_clear()
+        return get_settings()
+
+    yield apply
+    get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)

@@ -1,0 +1,11 @@
+# Dépendances de développement et d'intégration continue.
+#
+# L'image de production (docker/Dockerfile.backend) n'installe que
+# requirements.txt : ni pytest ni le linter ne sont embarqués.
+#
+# Installation locale : pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+pytest==9.1.1
+ruff==0.15.5

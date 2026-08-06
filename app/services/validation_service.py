@@ -20,6 +20,7 @@ Les transitions de statut réutilisent le graphe défini par
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING
@@ -71,6 +72,8 @@ _LINE_SCALAR_FIELDS: tuple[tuple[str, str], ...] = (
     ("amount", "amount"),
 )
 
+logger = logging.getLogger(__name__)
+
 
 class ValidationService:
     """Actions de validation / rejet / correction et création de la Vendor Bill."""
@@ -94,6 +97,7 @@ class ValidationService:
             message="Facture validée par le comptable.",
         )
         self.db.flush()
+        logger.info("Validation : facture %s validée par %s.", invoice.id, user.id)
         return invoice
 
     # --- Rejet ---------------------------------------------------------------------
@@ -116,6 +120,12 @@ class ValidationService:
             message=f"Facture rejetée : {reason}",
         )
         self.db.flush()
+        logger.info(
+            "Validation : facture %s rejetée par %s (motif : %s).",
+            invoice.id,
+            user.id,
+            reason,
+        )
         return invoice
 
     # --- Correction ---------------------------------------------------------------
@@ -251,9 +261,22 @@ class ValidationService:
         self._require_status(invoice, InvoiceStatus.VALIDATED)
 
         values = self._build_move_values(invoice)
+        logger.info(
+            "Odoo : création de la Vendor Bill pour la facture %s (%s).",
+            invoice.id,
+            invoice.invoice_number,
+        )
         try:
             move_id = int(self.odoo_client.create("account.move", values))
         except OdooError as exc:
+            logger.error(
+                "Odoo : création de la Vendor Bill en échec pour la facture %s "
+                "(tentative %s) : %s",
+                invoice.id,
+                (invoice.vendor_bill_attempts or 0) + 1,
+                exc,
+                exc_info=True,
+            )
             existing_id = self._find_existing_vendor_bill(invoice)
             if existing_id is not None:
                 self.invoices.update(
@@ -261,6 +284,11 @@ class ValidationService:
                     vendor_bill_id=existing_id,
                     vendor_bill_attempts=0,
                     vendor_bill_error=None,
+                )
+                logger.warning(
+                    "Odoo : Vendor Bill %s déjà présente, facture %s réconciliée.",
+                    existing_id,
+                    invoice.id,
                 )
                 self._log_reconciled(invoice, user, existing_id)
                 self.db.flush()
@@ -287,6 +315,9 @@ class ValidationService:
             details={"move_id": int(move_id)},
         )
         self.db.flush()
+        logger.info(
+            "Odoo : Vendor Bill %s créée pour la facture %s.", move_id, invoice.id
+        )
         return invoice
 
     def _find_existing_vendor_bill(self, invoice: Invoice) -> int | None:

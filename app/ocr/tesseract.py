@@ -9,11 +9,15 @@ confiance, fournis par ``image_to_data``.
 
 from __future__ import annotations
 
+import logging
+
 from PIL import Image
 
 from app.core.config import get_settings
 from app.core.exceptions import OcrEngineError
 from app.ocr.base import OcrEngine, OcrResult
+
+logger = logging.getLogger(__name__)
 
 
 class TesseractOcrEngine(OcrEngine):
@@ -32,6 +36,7 @@ class TesseractOcrEngine(OcrEngine):
 
                 self._pytesseract = pytesseract
             except Exception as exc:  # bibliothèque absente / binaire manquant
+                logger.error("Tesseract : indisponible : %s", exc, exc_info=True)
                 raise OcrEngineError(
                     f"Tesseract indisponible : {exc}"
                 ) from exc
@@ -54,8 +59,18 @@ class TesseractOcrEngine(OcrEngine):
             self._resolved_lang = self.lang
         elif langs:
             self._resolved_lang = "eng" if "eng" in langs else langs[0]
+            logger.warning(
+                "Tesseract : langue « %s » absente, repli sur « %s ».",
+                self.lang,
+                self._resolved_lang,
+            )
         else:
             self._resolved_lang = self.lang
+            logger.warning(
+                "Tesseract : liste des langues installées indisponible, "
+                "utilisation de « %s » telle quelle.",
+                self.lang,
+            )
         return self._resolved_lang
 
     def recognize(self, image: Image.Image) -> OcrResult:
@@ -71,6 +86,9 @@ class TesseractOcrEngine(OcrEngine):
         except OcrEngineError:
             raise
         except Exception as exc:  # toute erreur d'inférence Tesseract
+            logger.error(
+                "Tesseract : échec de la reconnaissance : %s", exc, exc_info=True
+            )
             raise OcrEngineError(f"Échec de la reconnaissance OCR : {exc}") from exc
 
         texts: list[str] = []
@@ -103,4 +121,6 @@ class TesseractOcrEngine(OcrEngine):
                 )
             except (TypeError, ValueError, IndexError):
                 boxes.append((0.0, 0.0, 0.0, 0.0))
+        if not texts:
+            logger.warning("Tesseract : aucun texte reconnu sur la page.")
         return OcrResult(texts=texts, scores=scores, page_index=0, boxes=boxes)

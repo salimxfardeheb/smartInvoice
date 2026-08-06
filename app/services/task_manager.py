@@ -15,6 +15,8 @@ chaque transition étant commitée pour être observable par polling.
 
 from __future__ import annotations
 
+import logging
+import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
@@ -25,6 +27,8 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models.enums import TaskKind
 from app.repositories.task_repository import TaskRepository
+
+logger = logging.getLogger(__name__)
 
 
 class Executor(ABC):
@@ -92,14 +96,49 @@ class TaskManager:
         elle reçoit le gestionnaire afin de récupérer ``session_factory``.
         """
         task_id = self._create_task(kind, invoice_id)
+        logger.info(
+            "Tâche %s (%s) créée pour la facture %s.",
+            task_id,
+            kind.value,
+            invoice_id,
+        )
 
         def _execute() -> None:
+            started = time.monotonic()
+            logger.info("Tâche %s (%s) démarrée.", task_id, kind.value)
             try:
                 self._phase_running(task_id)
                 payload = run(self)
                 self._phase_success(task_id, payload)
             except Exception as exc:  # noqa: BLE001 - état FAILED attendu
-                self._phase_failed(task_id, exc)
+                # Le job s'exécute dans un thread du pool : sans ce log, la
+                # trace de l'exception serait définitivement perdue (seul
+                # ``str(exc)`` est conservé en base).
+                logger.exception(
+                    "Tâche %s (%s) en échec après %.2f s : %s",
+                    task_id,
+                    kind.value,
+                    time.monotonic() - started,
+                    exc,
+                )
+                try:
+                    self._phase_failed(task_id, exc)
+                except Exception:  # noqa: BLE001 - la trace serait perdue sinon
+                    # Base injoignable au moment de l'écriture de l'échec : la
+                    # tâche restera « en cours » et sera neutralisée au
+                    # prochain démarrage (``startup_recovery``).
+                    logger.exception(
+                        "Tâche %s (%s) : impossible d'enregistrer l'état FAILED.",
+                        task_id,
+                        kind.value,
+                    )
+            else:
+                logger.info(
+                    "Tâche %s (%s) réussie en %.2f s.",
+                    task_id,
+                    kind.value,
+                    time.monotonic() - started,
+                )
 
         self.executor.submit(_execute)
         return task_id

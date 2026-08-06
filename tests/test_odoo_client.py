@@ -78,10 +78,35 @@ def make_client(**overrides) -> tuple[OdooClient, _FakeCommon, _FakeModels]:
 
 
 class TestAuthentication:
-    def test_missing_configuration_raises(self) -> None:
+    def test_missing_configuration_raises(self, odoo_env) -> None:
+        # ``OdooClient`` complète chaque paramètre vide par la configuration
+        # (``url or settings.odoo_url``) : le test n'a de sens que si celle-ci
+        # est elle aussi vide. On la fixe explicitement plutôt que de dépendre
+        # de l'environnement du poste (un .env renseigné rendait le client
+        # configuré, et ce test échouait).
+        odoo_env(
+            ODOO_URL="", ODOO_DB="", ODOO_USERNAME="", ODOO_PASSWORD="",
+            ODOO_API_KEY="",
+        )
         client, _, _ = make_client(url="", db="", username="", password="")
+        assert not client.is_configured
         with pytest.raises(OdooNotConfiguredError):
             client.authenticate()
+
+    def test_configuration_falls_back_to_settings(self, odoo_env) -> None:
+        """Un client sans paramètre explicite se configure depuis les réglages."""
+        odoo_env()
+        client = OdooClient()
+        assert client.is_configured
+        assert client.url == "http://odoo.test.invalid"
+        assert client.db == "test-db"
+
+    def test_api_key_takes_priority_over_password(self, odoo_env) -> None:
+        """La clé API d'un utilisateur applicatif prime sur le mot de passe."""
+        odoo_env(ODOO_API_KEY="cle-api-fictive")
+        client = OdooClient()
+        assert client.is_service_account
+        assert client._effective_password == "cle-api-fictive"
 
     def test_authenticate_success_is_cached(self) -> None:
         client, common, models = make_client()

@@ -19,6 +19,7 @@ client (:class:`OdooError` et ses sous-classes).
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -65,6 +66,8 @@ _CURRENCY_FIELDS = ["id", "name", "rate"]
 # État Odoo d'un bon de commande annulé.
 _CANCELLED_STATES = ("cancel",)
 
+logger = logging.getLogger(__name__)
+
 # Limites de recherche (évitent des réponses gigantesques).
 _PARTNER_SEARCH_LIMIT = 20
 _PO_SEARCH_LIMIT = 20
@@ -97,12 +100,19 @@ class OdooSyncService:
         reçoit le taux 1.0.
         """
         base = (base_currency or get_settings().fx_base_currency).upper()
-        rows = self.client.search_read(
-            "res.currency.rate",
-            [["rate", "!=", 0]],
-            _CURRENCY_RATE_FIELDS,
-            limit=_CURRENCY_RATE_LIMIT,
-        )
+        logger.info("Odoo : synchronisation des taux de change (base %s).", base)
+        try:
+            rows = self.client.search_read(
+                "res.currency.rate",
+                [["rate", "!=", 0]],
+                _CURRENCY_RATE_FIELDS,
+                limit=_CURRENCY_RATE_LIMIT,
+            )
+        except Exception as exc:  # noqa: BLE001 - remontée après trace
+            logger.error(
+                "Odoo : lecture des taux de change impossible : %s", exc, exc_info=True
+            )
+            raise
         stored: list[CurrencyRate] = []
         seen: set[str] = set()
         for row in rows:
@@ -119,6 +129,11 @@ class OdooSyncService:
         # La devise de référence est, par définition, à 1.0.
         stored.append(
             self.currency_rates.set_rate(base, Decimal("1.0"), base_currency=base)
+        )
+        logger.info(
+            "Odoo : %s taux de change enregistrés (%s devise(s) distincte(s)).",
+            len(stored),
+            len(seen),
         )
         return stored
 
@@ -144,17 +159,35 @@ class OdooSyncService:
         if not name or not name.strip():
             raise SupplierNotFoundError("Le nom du fournisseur extrait est vide.")
 
-        matches = self.client.search_read(
-            "res.partner",
-            self._partner_domain(name),
-            _PARTNER_FIELDS,
-            limit=_PARTNER_SEARCH_LIMIT,
-        )
+        try:
+            matches = self.client.search_read(
+                "res.partner",
+                self._partner_domain(name),
+                _PARTNER_FIELDS,
+                limit=_PARTNER_SEARCH_LIMIT,
+            )
+        except Exception as exc:  # noqa: BLE001 - remontée après trace
+            logger.error(
+                "Odoo : recherche du fournisseur « %s » impossible : %s",
+                name.strip(),
+                exc,
+                exc_info=True,
+            )
+            raise
         if not matches:
+            logger.warning(
+                "Odoo : aucun fournisseur trouvé pour « %s ».", name.strip()
+            )
             raise SupplierNotFoundError(
                 f"Aucun fournisseur trouvé dans Odoo pour « {name.strip()} »."
             )
-        return self._upsert_supplier(self._resolve_unique_partner(matches, name))
+        supplier = self._upsert_supplier(self._resolve_unique_partner(matches, name))
+        logger.info(
+            "Odoo : fournisseur « %s » synchronisé (odoo_id=%s).",
+            supplier.name,
+            supplier.odoo_id,
+        )
+        return supplier
 
     def _partner_domain(self, name: str) -> list:
         """Domaine de recherche des fournisseurs (``res.partner``, Odoo 16+)."""
@@ -165,6 +198,11 @@ class OdooSyncService:
         exact = [m for m in matches if self._normalize(m.get("name")) == self._normalize(name)]
         if len(exact) == 1:
             return exact[0]
+        logger.warning(
+            "Odoo : %s fournisseurs ambigus pour « %s ».",
+            len(exact or matches),
+            name.strip(),
+        )
         raise MultipleSuppliersFoundError(
             "Plusieurs fournisseurs correspondent à « "
             + name.strip()
@@ -209,14 +247,31 @@ class OdooSyncService:
         if supplier is not None:
             domain.append(["partner_id", "=", supplier.odoo_id])
 
-        matches = self.client.search_read(
-            "purchase.order", domain, _PO_FIELDS, limit=_PO_SEARCH_LIMIT
-        )
+        try:
+            matches = self.client.search_read(
+                "purchase.order", domain, _PO_FIELDS, limit=_PO_SEARCH_LIMIT
+            )
+        except Exception as exc:  # noqa: BLE001 - remontée après trace
+            logger.error(
+                "Odoo : recherche du bon de commande « %s » impossible : %s",
+                reference.strip(),
+                exc,
+                exc_info=True,
+            )
+            raise
         if not matches:
+            logger.warning(
+                "Odoo : aucun bon de commande trouvé pour « %s ».", reference.strip()
+            )
             raise PurchaseOrderNotFoundError(
                 f"Aucun bon de commande trouvé dans Odoo pour « {reference.strip()} »."
             )
         if len(matches) > 1:
+            logger.warning(
+                "Odoo : %s bons de commande ambigus pour « %s ».",
+                len(matches),
+                reference.strip(),
+            )
             raise MultiplePurchaseOrdersError(
                 "Plusieurs bons de commande correspondent à la référence « "
                 f"{reference.strip()} »."
@@ -224,12 +279,21 @@ class OdooSyncService:
 
         data = matches[0]
         if data.get("state") in _CANCELLED_STATES:
+            logger.warning(
+                "Odoo : bon de commande « %s » annulé.", reference.strip()
+            )
             raise PurchaseOrderCancelledError(
                 f"Le bon de commande « {reference.strip()} » est annulé."
             )
 
         supplier = supplier or self._supplier_for_order(data)
-        return self._upsert_purchase_order(data, supplier)
+        purchase_order = self._upsert_purchase_order(data, supplier)
+        logger.info(
+            "Odoo : bon de commande « %s » synchronisé (odoo_id=%s).",
+            purchase_order.reference,
+            purchase_order.odoo_id,
+        )
+        return purchase_order
 
     def _supplier_for_order(self, data: dict) -> Supplier:
         """Retrouve le fournisseur local correspondant au partenaire du BC."""
@@ -239,6 +303,10 @@ class OdooSyncService:
         )
         supplier = self.suppliers.get_by_odoo_id(int(odoo_partner_id))
         if supplier is None:
+            logger.warning(
+                "Odoo : fournisseur odoo_id=%s du bon de commande non synchronisé.",
+                odoo_partner_id,
+            )
             raise SupplierNotFoundError(
                 "Le fournisseur du bon de commande n'est pas encore synchronisé ; "
                 "synchronisez-le d'abord."
@@ -274,12 +342,21 @@ class OdooSyncService:
         mises à jour sinon. La référence produit est résolue en un second appel
         sur ``product.product``.
         """
-        rows = self.client.search_read(
-            "purchase.order.line",
-            [["order_id", "=", purchase_order.odoo_id]],
-            _PO_LINE_FIELDS,
-            limit=_PO_LINE_LIMIT,
-        )
+        try:
+            rows = self.client.search_read(
+                "purchase.order.line",
+                [["order_id", "=", purchase_order.odoo_id]],
+                _PO_LINE_FIELDS,
+                limit=_PO_LINE_LIMIT,
+            )
+        except Exception as exc:  # noqa: BLE001 - remontée après trace
+            logger.error(
+                "Odoo : lecture des lignes du bon de commande %s impossible : %s",
+                purchase_order.odoo_id,
+                exc,
+                exc_info=True,
+            )
+            raise
         product_ids = {
             int(row["product_id"][0])
             for row in rows
@@ -297,6 +374,11 @@ class OdooSyncService:
         lines: list[PurchaseOrderLine] = []
         for index, row in enumerate(rows):
             lines.append(self._upsert_line(purchase_order, row, index, refs, tax_rates))
+        logger.info(
+            "Odoo : %s ligne(s) chargée(s) pour le bon de commande « %s ».",
+            len(lines),
+            purchase_order.reference,
+        )
         return lines
 
     def _load_product_refs(self, product_ids: list[int]) -> dict[int, str]:

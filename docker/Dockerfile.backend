@@ -1,0 +1,79 @@
+# Image de production de l'API SmartInvoice (FastAPI + pipeline OCR).
+#
+# Construction depuis la racine du dépôt :
+#   docker build -f docker/Dockerfile.backend -t smartinvoice-backend .
+#
+# Le point sensible est le préchargement des modèles PaddleOCR : sans lui, le
+# premier appel OCR en production déclencherait un téléchargement de plusieurs
+# centaines de Mo, avec un premier traitement qui semble « bloqué » et qui
+# échoue si l'hôte n'a pas d'accès sortant.
+
+FROM python:3.12-slim
+
+# - tesseract-ocr / -fra : moteur OCR secondaire (OCR_ENGINE=tesseract) ;
+# - libgl1 + libglib2.0-0 : dépendances natives d'OpenCV (cv2) tiré par PaddleOCR ;
+# - curl : sonde du healthcheck Docker (voir docker-compose.yml).
+# pypdfium2 embarque sa propre bibliothèque native : aucun paquet requis.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        tesseract-ocr \
+        tesseract-ocr-fra \
+        libgl1 \
+        libglib2.0-0 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Compte non privilégié : le préchargement des modèles doit s'exécuter sous
+# cette identité pour que le cache atterrisse dans le HOME lu à l'exécution.
+RUN useradd --create-home --shell /bin/bash app
+
+WORKDIR /app
+
+# Couche de dépendances isolée : elle n'est reconstruite que si le fichier
+# change, alors que le code applicatif change à chaque commit.
+# requirements-dev.txt (pytest, ruff) n'est volontairement pas installé ici.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Racine de stockage des documents : montée en volume par docker-compose afin
+# de survivre à la reconstruction de l'image. Créée en root puis donnée à
+# `app`, qui n'a pas le droit d'écrire dans /app.
+ENV STORAGE_ROOT=/app/storage
+RUN mkdir -p /app/storage && chown -R app:app /app
+
+COPY docker/entrypoint.backend.sh /usr/local/bin/entrypoint.sh
+
+# HOME fixé explicitement : PaddleOCR met ses modèles en cache sous
+# ``$HOME/.paddlex``. Si HOME différait entre le build et l'exécution, le
+# préchargement ci-dessous serait silencieusement inutile et le premier appel
+# OCR retéléchargerait tout.
+ENV HOME=/home/app
+USER app
+
+# Préchargement des modèles PaddleOCR (détection + reconnaissance, langue fr).
+# Les paramètres reproduisent ceux de app/ocr/paddle.py : un jeu d'options
+# différent téléchargerait d'autres modèles et le cache resterait inutilisé.
+# Placé avant la copie du code pour ne pas être réinvalidé à chaque commit.
+RUN python -c "\
+from paddleocr import PaddleOCR; \
+PaddleOCR(lang='fr', use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False); \
+print('Modèles PaddleOCR préchargés.')"
+
+COPY --chown=app:app alembic.ini ./
+COPY --chown=app:app alembic ./alembic
+COPY --chown=app:app app ./app
+
+EXPOSE 8000
+
+# Invoqué via `bash` : le bit exécutable du script n'est pas préservé sur les
+# postes Windows, et un ENTRYPOINT direct échouerait alors avec « permission
+# denied ».
+ENTRYPOINT ["bash", "/usr/local/bin/entrypoint.sh"]
+# Un seul worker : le limiteur de débit, la file de jobs OCR et le registre de
+# métriques sont des singletons en mémoire du processus (cf. app/main.py).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
