@@ -27,6 +27,15 @@ COPY frontend/ ./
 
 # Télémétrie désactivée : un build CI ne doit pas émettre d'appel sortant.
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Destination du proxy /api/* (next.config.mjs). Next.js évalue `rewrites()`
+# à la construction et fige le résultat dans `.next/routes-manifest.json` :
+# la valeur doit donc être fournie ici, comme argument de build. Une variable
+# d'environnement posée à l'exécution serait sans effet, et le serveur
+# proxifierait vers son propre conteneur (ECONNREFUSED sur 127.0.0.1:8000).
+ARG API_BASE_URL=http://backend:8000
+ENV API_BASE_URL=$API_BASE_URL
+
 RUN npm run build
 
 # --- Étape 3 : exécution ----------------------------------------------------

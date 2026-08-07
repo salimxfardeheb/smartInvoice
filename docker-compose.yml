@@ -76,14 +76,16 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
+      args:
+        # Destination du proxy /api/* de next.config.mjs. Obligatoirement un
+        # argument de build : Next.js fige les `rewrites()` dans le manifeste
+        # à la construction, une variable d'exécution serait ignorée.
+        # Changer cette valeur impose de reconstruire l'image du frontend.
+        API_BASE_URL: http://backend:8000
     restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy
-    environment:
-      # Lu au démarrage du serveur Next par next.config.mjs, qui proxifie
-      # /api/* vers l'API : variable d'exécution, pas d'argument de build.
-      API_BASE_URL: http://backend:8000
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     healthcheck:
