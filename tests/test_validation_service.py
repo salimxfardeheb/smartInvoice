@@ -240,7 +240,7 @@ class TestCorrect:
         assert by_number[3].description == "Adaptateur USB"
         logs = AuditLogRepository(session).list_by_invoice(invoice.id)
         assert len(logs) == 1
-        assert [l["status"] for l in logs[0].details["lines"]] == [
+        assert [line["status"] for line in logs[0].details["lines"]] == [
             "modifiée",
             "créée",
             "supprimée",

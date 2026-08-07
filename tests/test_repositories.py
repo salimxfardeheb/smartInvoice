@@ -11,7 +11,6 @@ from app.models.enums import (
     AnomalyCategory,
     AuditAction,
     InvoiceStatus,
-    UserRole,
 )
 from app.models.refresh_token import RefreshToken
 from app.repositories import (
@@ -172,7 +171,7 @@ class TestPurchaseOrderLineRepository:
         session.commit()
 
         lines = repo.list_by_purchase_order(po.id)
-        assert [l.line_number for l in lines] == [10, 20]
+        assert [line.line_number for line in lines] == [10, 20]
         assert repo.get_by_odoo_id(1) is lines[0]
         assert repo.get_by_odoo_id(999) is None
 
@@ -335,7 +334,7 @@ class TestInvoiceLineRepository:
         session.commit()
 
         lines = repo.list_by_invoice(invoice.id)
-        assert [l.line_number for l in lines] == [1, 2]
+        assert [line.line_number for line in lines] == [1, 2]
 
 
 class TestAnomalyRepository:

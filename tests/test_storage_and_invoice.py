@@ -74,7 +74,6 @@ class TestLocalStorage:
 
 class TestGetSourceFile:
     def test_missing_file_path_raises(self, session, tmp_path) -> None:
-        from app.models.enums import InvoiceStatus
 
         supplier = make_supplier(session, odoo_id=11, name="ACME")
         from app.repositories import InvoiceRepository

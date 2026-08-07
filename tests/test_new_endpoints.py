@@ -21,7 +21,6 @@ from app.models.enums import (
     AnomalyCategory,
     AnomalySeverity,
     AuditAction,
-    InvoiceStatus,
     UserRole,
 )
 from app.services.odoo_service import OdooSyncService
@@ -160,7 +159,7 @@ class TestOdooSyncEndpoints:
         assert resp.json()["purchase_order"]["reference"] == "PO-2026-001"
 
     def test_purchase_order_lines_read_and_sync(self, odoo_sync, engine) -> None:
-        from app.repositories import PurchaseOrderRepository, SupplierRepository
+        from app.repositories import PurchaseOrderRepository
 
         headers = _register_roles(odoo_sync)["comptable"]
         supplier_id, _ = _make_supplier_invoice(engine, status="Déposée")
@@ -407,7 +406,6 @@ class TestRetry:
         try:
             from app.repositories import InvoiceRepository
 
-            from app.models.enums import InvoiceStatus
 
             inv = InvoiceRepository(db).get(invoice_id)
             InvoiceRepository(db).update(inv, error_message="Echec précédent")

@@ -12,7 +12,6 @@ peuvent le remplacer par un bouchon implémentant la même interface
 
 from __future__ import annotations
 
-import socket
 import xmlrpc.client
 
 from app.core.config import get_settings

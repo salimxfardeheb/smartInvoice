@@ -33,7 +33,6 @@ from app.core.exceptions import (
     OdooError,
     RejectionReasonRequiredError,
 )
-from app.models.audit_log import AuditLog
 from app.models.enums import AuditAction, InvoiceStatus
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine

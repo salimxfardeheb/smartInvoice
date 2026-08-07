@@ -14,8 +14,6 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.orm import sessionmaker
 
-from app.core.exceptions import ConcurrentModificationError
-from app.models.enums import InvoiceStatus
 from tests.conftest import auth_headers, register_user
 from tests.ocr_fakes import FakeOcrEngine, make_pdf_bytes
 
@@ -199,7 +197,7 @@ class TestPersistentSettings:
 
         Session = sessionmaker(bind=engine)
         with Session() as db:
-            supplier = SupplierRepository(db).create(odoo_id=9, name="S9")
+            SupplierRepository(db).create(odoo_id=9, name="S9")
             db.commit()
             sm = MatchingService(db)
             assert sm.quantity_tolerance == 0.5

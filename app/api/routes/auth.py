@@ -6,12 +6,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
 
 from app.api.deps import (
     get_auth_service,
     get_current_user,
-    get_db,
     rate_limit,
 )
 from app.models.user import User

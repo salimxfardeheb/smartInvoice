@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_db, require_permissions
 from app.core.exceptions import NotFoundError

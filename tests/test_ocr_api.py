@@ -145,7 +145,10 @@ class TestProcess:
 
     def test_process_requires_authentication(self, ocr_client, engine) -> None:
         client, _ = ocr_client
-        supplier_id = _create_supplier(engine)
+        # L'appel est conservé pour son effet de bord (création en base) : le
+        # rejet doit être dû à l'absence d'authentification, pas à une facture
+        # inexistante.
+        _create_supplier(engine)
         response = client.post("/api/invoices/1/process")
         assert response.status_code == 401
 

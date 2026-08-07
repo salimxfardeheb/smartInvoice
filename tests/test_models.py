@@ -19,8 +19,6 @@ from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
 from app.models.purchase_order import PurchaseOrder
 from app.models.purchase_order_line import PurchaseOrderLine
-from app.models.supplier import Supplier
-from app.models.user import User
 
 from tests.conftest import make_invoice, make_supplier
 

@@ -27,7 +27,7 @@ class TestUpdateUser:
         first = service.create_user(
             username="alice", email="alice@example.com", role=UserRole.ACCOUNTANT, password="Password123!"
         )
-        second = service.create_user(
+        service.create_user(
             username="bob", email="bob@example.com", role=UserRole.ACCOUNTANT, password="Password123!"
         )
 

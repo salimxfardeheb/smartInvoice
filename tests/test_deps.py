@@ -9,8 +9,6 @@ fabriques de services.
 from __future__ import annotations
 
 import pytest
-from fastapi import Depends
-from fastapi.exceptions import HTTPException
 
 from app.core.exceptions import (
     InvalidTokenError,
@@ -24,12 +22,10 @@ from app.core.security import (
     create_refresh_token,
 )
 from app.models.enums import UserRole
-from tests.conftest import make_supplier
 
 
 def _make_user(session, *, username: str = "user", role: UserRole = UserRole.ACCOUNTANT):
     """Crée un utilisateur actif via le repository (sans hash coûteux)."""
-    from app.models.user import User
     from app.repositories import UserRepository
 
     return UserRepository(session).create(
@@ -62,7 +58,7 @@ class TestGetCurrentUser:
             self._resolve(session, token)
 
     def test_token_without_subject_rejected(self, session) -> None:
-        from app.core.security import TOKEN_TYPE_ACCESS, decode_token
+        from app.core.security import decode_token
 
         token = create_access_token(1, UserRole.ACCOUNTANT.value)
         # Ré-émet un jeton sans « sub ».

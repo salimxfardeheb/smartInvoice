@@ -142,7 +142,7 @@ class TestConformingMatch:
         MatchingService(session).match(invoice)
 
         lines = InvoiceLineRepository(session).list_by_invoice(invoice.id)
-        assert [l.purchase_order_line_odoo_id for l in lines] == [1, 2]
+        assert [line.purchase_order_line_odoo_id for line in lines] == [1, 2]
 
     def test_invoice_links_and_score_are_persisted(self, session) -> None:
         _, po, invoice = _build_context(session)

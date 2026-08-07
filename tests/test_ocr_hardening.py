@@ -211,7 +211,6 @@ def test_layout_blocks_capture_boxes_and_confidence() -> None:
             )
         ]
     )
-    service = OcrService.__new__(OcrService)
     result = engine.recognize(Image.new("RGB", (100, 100)))
     layout = OcrService._build_layout(result)
 

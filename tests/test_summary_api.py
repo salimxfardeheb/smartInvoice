@@ -6,10 +6,9 @@ remontée des anomalies non résolues, ainsi que l'authentification.
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy.orm import sessionmaker
 
-from app.models.enums import AnomalyCategory, AnomalySeverity, InvoiceStatus
+from app.models.enums import AnomalyCategory, AnomalySeverity
 
 
 def _create_fixture(engine) -> tuple[int, int]:

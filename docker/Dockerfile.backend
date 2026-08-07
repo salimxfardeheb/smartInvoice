@@ -8,7 +8,12 @@
 # centaines de Mo, avec un premier traitement qui semble « bloqué » et qui
 # échoue si l'hôte n'a pas d'accès sortant.
 
-FROM python:3.12-slim
+# Plateforme épinglée : paddlepaddle==3.3.1 ne publie pas de roue pour
+# linux/arm64 (la plus récente y est 3.2.2). Sans cette contrainte, la
+# construction échoue sur un poste Apple Silicon, où Docker cible l'architecture
+# de l'hôte. linux/amd64 est aussi la cible de déploiement habituelle ; sur un
+# hôte ARM la construction et l'exécution passent par l'émulation (plus lentes).
+FROM --platform=linux/amd64 python:3.12-slim
 
 # - tesseract-ocr / -fra : moteur OCR secondaire (OCR_ENGINE=tesseract) ;
 # - libgl1 + libglib2.0-0 : dépendances natives d'OpenCV (cv2) tiré par PaddleOCR ;

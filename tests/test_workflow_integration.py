@@ -20,7 +20,6 @@ OCR factice et client Odoo factice (création de l'``account.move``).
 
 from __future__ import annotations
 
-from decimal import Decimal
 
 import pytest
 from sqlalchemy.orm import sessionmaker
@@ -230,7 +229,6 @@ class TestHappyPath:
         client, holder = workflow_client
         headers = _register_accountant(client)
 
-        Session = sessionmaker(bind=engine)
         with _db_session(engine) as db:
             supplier_id, _ = _seed_supplier_and_po(db)
 
