@@ -1,8 +1,16 @@
 /* Service worker SmartInvoice — cache des fichiers lus (offline first). */
 /* eslint-disable no-restricted-globals */
 
-const CACHE = "smartinvoice-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icons/icon.svg"];
+// Version incrémentée à chaque changement d'`APP_SHELL` : l'ancien cache est
+// purgé à l'activation (cf. `activate`).
+const CACHE = "smartinvoice-v2";
+const APP_SHELL = [
+  "/",
+  "/manifest.webmanifest",
+  "/favicon.ico",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

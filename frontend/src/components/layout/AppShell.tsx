@@ -8,6 +8,7 @@ import { useState } from "react";
 
 import { useAuth } from "@/lib/auth";
 import { ROLE_LABELS } from "@/lib/status";
+import { Logo } from "@/components/ui/Logo";
 
 const NAV_ITEMS = [
   { href: "/", label: "Tableau de bord", icon: "▦" },
@@ -72,13 +73,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           collapsed ? "w-16" : "w-60"
         }`}
       >
-        <div className="flex h-14 items-center gap-2 px-4">
-          <span className="text-xl" aria-hidden>
-            🧾
-          </span>
-          {!collapsed && (
-            <span className="text-sm font-semibold text-white">SmartInvoice</span>
-          )}
+        <div
+          className={`flex h-14 items-center ${collapsed ? "justify-center px-2" : "px-4"}`}
+        >
+          <Link href="/" aria-label="SmartInvoice — tableau de bord" className="flex items-center">
+            {collapsed ? (
+              <Logo variant="mark" tone="white" height={26} />
+            ) : (
+              <Logo variant="lockup" tone="white" height={24} />
+            )}
+          </Link>
         </div>
         <nav className="mt-2 flex-1 space-y-1 px-2">
           {NAV_ITEMS.map((item) => renderNavItem(item, pathname, collapsed))}

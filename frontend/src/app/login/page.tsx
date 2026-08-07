@@ -9,6 +9,7 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
+import { Logo } from "@/components/ui/Logo";
 
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
@@ -41,11 +42,12 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-slate-100 px-4">
+      <Logo height={44} priority className="mb-8" />
       <Card className="w-full max-w-sm">
         <CardHeader
-          title="SmartInvoice"
-          subtitle="Connexion à l'interface de gestion des factures"
+          title="Connexion"
+          subtitle="Accès à l'interface de gestion des factures"
         />
         <CardBody>
           {error && <Alert tone="danger" className="mb-4">{error}</Alert>}
