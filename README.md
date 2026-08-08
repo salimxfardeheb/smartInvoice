@@ -82,11 +82,12 @@ smartInvoice/
 │   ├── main.py                   # Fabrique de l'application, CORS, exception handlers HTTP
 │   ├── api/
 │   │   ├── deps.py               # Dépendances FastAPI (DB, services, permissions)
-│   │   └── routes/               # 9 routers : auth, users, invoices, anomalies,
-│   │                             #   odoo, config, catalog, tasks, metrics
+│   │   └── routes/               # 10 routers : auth, users, invoices, anomalies,
+│   │                             #   odoo, config, catalog, tasks, metrics, health
 │   ├── core/
 │   │   ├── config.py             # Configuration Pydantic-settings (variables d'env)
 │   │   ├── exceptions.py         # Exceptions métier → statuts HTTP
+│   │   ├── logging_config.py     # Configuration du logging (idempotente, LOG_LEVEL)
 │   │   ├── metrics.py            # Registre de métriques (exposition Prometheus)
 │   │   ├── permissions.py        # Matrice rôle → permissions
 │   │   ├── ratelimit.py          # Limiteur en fenêtre glissante (auth)
@@ -138,8 +139,9 @@ smartInvoice/
 │
 ├── alembic/                      # Migrations de schéma
 │   ├── env.py
-│   └── versions/                 # 0001 → 0008 (schéma, refresh tokens, fichiers, BC,
-│                                 #   audit, actions, tâches/settings/version, Odoo)
+│   └── versions/                 # 0001 → 0009 (schéma, refresh tokens, fichiers, BC,
+│                                 #   audit, actions, tâches/settings/version, Odoo,
+│                                 #   action « tâche interrompue »)
 │
 ├── frontend/                     # Interface Next.js 14
 │   ├── public/                   # manifest.webmanifest, sw.js, icônes (PWA)
@@ -149,12 +151,12 @@ smartInvoice/
 │   │   │                         #   anomalies, users, odoo
 │   │   ├── components/           # ui/, layout/, dashboard/, invoices/, anomalies/,
 │   │   │                         #   users/, odoo/
-│   │   ├── hooks/                # useAsync, useInvoices, useTaskPolling
+│   │   ├── hooks/                # useAdmin, useAsync, useInvoices, useTask
 │   │   ├── lib/                  # api-client, auth, config, errors, format, status, tokens
 │   │   └── types/                # Types alignés sur les schémas Pydantic
 │   └── tests/                    # Jest + Testing Library
 │
-├── tests/                        # Tests backend (pytest) — 25 modules
+├── tests/                        # Tests backend (pytest) — 28 modules
 ├── datasets/                     # Factures d'exemple FR/EN + generate_samples.py
 ├── scripts/                      # sync_odoo.py (synchronisation périodique, cron)
 ├── odoo/                         # Config serveur + addon smartinvoice_bridge (squelette)
@@ -189,9 +191,9 @@ en « Erreur système » avec une action d'audit dédiée.
 - **Abstraction d'exécution** : `Executor` (`ThreadedExecutor` en production,
   `InlineExecutor` dans les tests) rend les jobs asynchrones déterministes
   en test, sans broker externe.
-- **Verrou optimiste** : les factures sont versionnées (`version_id`), ce qui
+- **Verrou optimiste** : les factures sont versionnées (colonne `version`), ce qui
   protège des écritures concurrentes (double-clic, retries, jobs parallèles).
-- **Migrations** : Alembic, 8 révisions ; convention de nommage des contraintes
+- **Migrations** : Alembic, 9 révisions ; convention de nommage des contraintes
   centralisée dans `app/db/base.py`.
 - **JSONB en PostgreSQL** (avec variante JSON pour les tests SQLite) : portabilité
   du schéma.
@@ -659,7 +661,8 @@ et le frontend double le contrôle côté UI avec `RequireAuth` / `RequireRole`.
 
 ```bash
 source .venv/bin/activate
-python -m pytest                     # 454 tests, ~100 s
+python -m pytest                     # 475 tests, ~95 s
+ruff check app tests                 # linter — propre
 python -m pytest --cov=app           # couverture globale 95 %
 ```
 
@@ -669,11 +672,14 @@ python -m pytest --cov=app           # couverture globale 95 %
 - Les jobs asynchrones utilisent `InlineExecutor` en test : le pipeline
   s'exécute dans le fil de l'appel, les assertions restent déterministes.
 
-> **Un test échoue actuellement** en présence d'un `.env` local renseigné :
-> `test_odoo_client.py::TestAuthentication::test_missing_configuration_raises`.
-> C'est un défaut d'isolation de la suite (le `.env` du développeur fuite dans
-> les settings), pas une régression du code applicatif. Détail et correctif
-> dans `AUDIT.md`, § 7.
+- **Isolation totale de la configuration** : `tests/conftest.py` neutralise le
+  `.env` du poste et purge les variables d'environnement correspondant aux
+  réglages, **dès l'import du module** (avant tout import applicatif, car
+  `app.db.session` construit son moteur à l'import). La suite donne donc le même
+  résultat sur tous les postes et ne peut pas atteindre une base réelle.
+- **Compatibilité PostgreSQL** vérifiée sans serveur par
+  `tests/test_postgres_compat.py` (repli JSONB/JSON, enums non natifs en
+  contraintes CHECK, requête de verrou optimiste compilée sur les deux dialectes).
 
 ### Frontend
 
@@ -692,6 +698,9 @@ Couverture frontend : 78 % instructions / 63 % branches (les `lib/*` et
 
 ## Documentation
 
+- `docs/GUIDE-STACK.md` — **guide pédagogique de la stack**, pour prendre en main
+  le projet sans connaissance préalable des technologies employées : rôle de
+  chaque brique, découpage en couches, parcours d'une requête, glossaire.
 - `AUDIT.md` — état vérifié du projet et travaux restants, par priorité.
   **Non versionné** (présent dans `.gitignore`).
 - `frontend/README.md` — guide frontend.
@@ -704,10 +713,25 @@ Couverture frontend : 78 % instructions / 63 % branches (les `lib/*` et
 
 Ces limites sont détaillées, avec leur correctif envisagé, dans `AUDIT.md`.
 
-- **Déploiement à éprouver** : la pile Docker (`docker compose up --build`) et
-  la CI GitHub Actions existent mais n'ont pas encore tourné sur une machine
-  disposant de Docker — le premier build, qui précharge les modèles PaddleOCR,
-  reste à valider.
+- **OCR inopérant en l'état** ⚠️ : `app/ocr/paddle.py` lit `rec_texts` à la
+  racine de `page.json`, alors que PaddleOCR 3.7 imbrique le résultat sous la
+  clé `res`. Le moteur renvoie donc **systématiquement zéro texte**, sur toute
+  plateforme, et les factures finissent en « Erreur système » sans données
+  extraites. Les tests ne l'ont pas détecté : ils simulent le moteur avec une
+  structure à plat qui ne correspond pas à la bibliothèque réelle
+  (`tests/test_ocr_engines.py`, `tests/ocr_fakes.py`).
+- **Image backend limitée à `linux/amd64`** : `paddlepaddle==3.3.1` ne publie
+  pas de roue `linux/arm64`, d'où le `--platform=linux/amd64` de
+  `docker/Dockerfile.backend`. Sur un hôte ARM (Apple Silicon), le conteneur
+  tourne en émulation et l'OCR échoue en plus dans oneDNN, la couche
+  d'accélération x86 de PaddlePaddle. **Déployer sur x86_64** ; en développement
+  sur Mac ARM, lancer le backend en natif plutôt qu'en conteneur.
+- **Auto-inscription ouverte** ⚠️ : `POST /api/auth/register` n'exige aucune
+  authentification, n'est pas soumis au rate limiting (contrairement à
+  `/login`) et **honore le rôle transmis par le client**. Sur une instance
+  exposée, n'importe qui peut donc se créer un compte **Administrateur**. À
+  fermer avant toute mise en ligne (inscription réservée au bootstrap du premier
+  compte, ou aux administrateurs).
 - **Mono-instance** : la file de tâches et le rate limiter vivent en mémoire du
   processus. Pas de reprise des tâches après un crash, pas de compteur partagé
   entre répliques — une migration Redis + Celery/RQ sera nécessaire pour
@@ -718,6 +742,6 @@ Ces limites sont détaillées, avec leur correctif envisagé, dans `AUDIT.md`.
 - **Intégration Odoo testée avec des doubles** : aucun test de bout en bout
   contre un serveur Odoo réel. L'addon `odoo/addons/smartinvoice_bridge` n'est
   qu'un squelette (manifeste seul, aucun modèle) et `odoo/config/odoo.conf` est
-  vide.
-- **Tests sur SQLite uniquement** : le comportement sous PostgreSQL (JSONB,
-  contraintes, verrous concurrents) n'est pas encore validé en continu.
+  vide. Par ailleurs `/healthz` rapporte l'état de la *configuration* Odoo sans
+  ouvrir de connexion : une configuration complète mais pointant vers un serveur
+  injoignable est donc rapportée « ok ».
