@@ -16,6 +16,7 @@ from app.ocr.cleaners import (
     find_amounts,
     find_amounts_with_spans,
     normalize_amount,
+    strip_currency,
 )
 from app.ocr.schema import OcrLineItem
 
@@ -27,10 +28,14 @@ _TOTAL_KEYWORDS = (
     "remise",
     "discount",
     "livraison",
+    "frais de port",
+    "frais de livraison",
     "shipping",
     "transport",
     "tva",
     "taxe",
+    "tax",
+    "vat",
     "net à payer",
     "net a payer",
     "arrondi",
@@ -219,7 +224,11 @@ class InvoiceLineParser:
     def _strip_amount_tokens(
         line: str, spans: list[tuple[int, int, object]]
     ) -> str:
-        """Retire les montants et les pourcentages d'une ligne."""
+        """Retire les montants, pourcentages et symboles monétaires d'une ligne.
+
+        Les symboles de devise entourent les montants (« 8,50 € 68,00 € ») :
+        les laisser ferait une désignation « € € » une fois les nombres ôtés.
+        """
         parts: list[str] = []
         last = 0
         for start, end, _ in spans:
@@ -228,7 +237,7 @@ class InvoiceLineParser:
         parts.append(line[last:])
         stripped = "".join(parts)
         stripped = _PERCENT_RE.sub("", stripped)
-        return clean_text(stripped)
+        return clean_text(strip_currency(stripped))
 
     @staticmethod
     def _split_description(
@@ -236,8 +245,15 @@ class InvoiceLineParser:
     ) -> tuple[str, str | None]:
         """Sépare la référence produit de la désignation."""
         text = stripped
-        if unit and text.lower().startswith(unit.lower()):
-            text = text[len(unit):].strip()
+        if unit:
+            # L'unité suit la quantité : une fois les nombres retirés, elle
+            # subsiste comme mot isolé au milieu de la désignation.
+            text = clean_text(
+                re.sub(
+                    rf"(?<!\w){re.escape(unit)}(?!\w)", " ", text, count=1,
+                    flags=re.IGNORECASE,
+                )
+            )
         product_ref: str | None = None
         match = _PRODUCT_REF_RE.match(text)
         if match:

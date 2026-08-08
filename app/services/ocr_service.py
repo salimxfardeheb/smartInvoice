@@ -7,6 +7,8 @@ Le pipeline se déroule ainsi :
 4. reconnaissance par le moteur OCR (PaddleOCR par défaut, Tesseract en
    alternative selon ``ocr_engine``) ;
 5. classification des pages (annexes exclues de l'extraction) ;
+5 bis. reconstruction des lignes de lecture à partir des boîtes englobantes
+   (les moteurs rendent des fragments positionnés, pas des lignes) ;
 6. nettoyage et structuration (champs généraux, financiers, lignes) ;
 7. persistance (``extracted_data`` avec preuves visuelles : images de pages,
    boîtes englobantes, confiance par champ ; score global, colonnes métier,
@@ -45,6 +47,7 @@ from app.ocr.document import DocumentLoader
 from app.ocr.extractor import FIELD_LABELS, FieldExtractor
 from app.ocr.lines import InvoiceLineParser
 from app.ocr.pages import is_annex
+from app.ocr.rows import group_rows
 from app.ocr.schema import OcrBox, OcrExtraction, OcrPage, OcrTextBlock
 from app.repositories import (
     AnomalyRepository,
@@ -182,7 +185,13 @@ class OcrService:
         for result, page in zip(results, pages):
             if page.is_annex:
                 continue
-            for text, score in zip(result.texts, result.scores):
+            # Le moteur rend des fragments positionnés, pas des lignes : on
+            # reconstitue les lignes de lecture avant toute extraction (la
+            # page conserve, elle, les détections brutes comme preuve).
+            row_texts, row_scores = group_rows(
+                result.texts, result.scores, result.boxes
+            )
+            for text, score in zip(row_texts, row_scores):
                 cleaned = clean_text(text)
                 if cleaned:
                     main_texts.append(cleaned)

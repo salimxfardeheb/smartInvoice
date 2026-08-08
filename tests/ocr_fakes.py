@@ -2,12 +2,17 @@
 
 Le moteur OCR de production (PaddleOCR) télécharge et exécute des modèles
 coûteux : les tests injectent un :class:`FakeOcrEngine` dont le comportement
-est contrôlé par le test (textes, scores, voire résultats par page).
+est contrôlé par le test (textes, scores, boîtes, voire résultats par page).
+
+Ce bouchon implémente le **contrat** :class:`~app.ocr.base.OcrEngine` — il ne
+reproduit *pas* l'API interne de PaddleOCR. La conversion de la sortie réelle
+de PaddleOCR vers ce contrat est testée séparément, à partir d'échantillons
+capturés sur le vrai moteur (``tests/paddle_samples.py``).
 """
 
 from __future__ import annotations
 
-from app.ocr.base import OcrEngine, OcrResult
+from app.ocr.base import BBox, OcrEngine, OcrResult
 
 SAMPLE_INVOICE_LINES = [
     "ACME SAS",
@@ -35,6 +40,19 @@ SAMPLE_LINE_ITEMS = [
 ]
 
 
+def stacked_boxes(texts: list[str]) -> list[BBox]:
+    """Boîtes englobantes plausibles : une ligne de texte par bande horizontale.
+
+    Le contrat :class:`OcrResult` prévoit une boîte par texte ; un bouchon qui
+    n'en fournit aucune ne représenterait qu'une partie du contrat (le vrai
+    moteur en fournit toujours).
+    """
+    return [
+        (60.0, 60.0 + index * 46, 60.0 + 22 * max(len(text), 1), 100.0 + index * 46)
+        for index, text in enumerate(texts)
+    ]
+
+
 class FakeOcrEngine(OcrEngine):
     """Moteur OCR de bouchon dont la sortie est pilotée par le test."""
 
@@ -43,10 +61,12 @@ class FakeOcrEngine(OcrEngine):
         *,
         texts: list[str] | None = None,
         scores: list[float] | None = None,
+        boxes: list[BBox] | None = None,
         results: list[OcrResult] | None = None,
     ) -> None:
         self._texts = list(texts or [])
         self._scores = list(scores or [])
+        self._boxes = list(boxes) if boxes is not None else stacked_boxes(self._texts)
         self._results = list(results or [])
         self.calls: list[OcrResult] = []
 
@@ -59,6 +79,7 @@ class FakeOcrEngine(OcrEngine):
                 texts=list(self._texts),
                 scores=list(self._scores),
                 page_index=0,
+                boxes=list(self._boxes),
             )
         self.calls.append(result)
         return result

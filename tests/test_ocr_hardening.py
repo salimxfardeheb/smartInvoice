@@ -382,10 +382,17 @@ def test_sample_datasets_exist_and_are_valid() -> None:
         "multi_currency_invoice.jpg",
         "fr_invoice_multi.pdf",
         "en_invoice.pdf",
+        "fr_invoice_digital.pdf",
+        "fr_invoice_scan.jpg",
     ):
         assert os.path.exists(os.path.join(dataset_dir, name)), name
 
     with open(os.path.join(dataset_dir, "fr_invoice_multi.pdf"), "rb") as fh:
         doc = pdfium.PdfDocument(fh.read())
         assert len(doc) == 2  # page principale + annexe
+        doc.close()
+
+    with open(os.path.join(dataset_dir, "fr_invoice_digital.pdf"), "rb") as fh:
+        doc = pdfium.PdfDocument(fh.read())
+        assert len(doc) == 1
         doc.close()

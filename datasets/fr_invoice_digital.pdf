@@ -1,0 +1,49 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1280 >>
+stream
+BT /F1 16 Tf 50 782 Td (FACTURE) Tj ET
+BT /F1 11 Tf 50 730 Td (Fournisseur : NORDTEC INDUSTRIE SARL) Tj ET
+BT /F1 11 Tf 50 704 Td (48 avenue de la Gare) Tj ET
+BT /F1 11 Tf 50 678 Td (69003 Lyon) Tj ET
+BT /F1 11 Tf 50 626 Td (Numéro de facture : FAC-2026-0188) Tj ET
+BT /F1 11 Tf 50 600 Td (Date d'émission : 02/04/2026) Tj ET
+BT /F1 11 Tf 50 574 Td (Échéance : 02/05/2026) Tj ET
+BT /F1 11 Tf 50 548 Td (Bon de commande : PO-2026-0456) Tj ET
+BT /F1 11 Tf 50 522 Td (Référence fournisseur : NT-CLI-2291) Tj ET
+BT /F1 11 Tf 50 470 Td (Désignation             Qté   U    PU          Montant) Tj ET
+BT /F1 11 Tf 50 444 Td (Disque SSD 1 To         4     u    72,00 €     288,00 €) Tj ET
+BT /F1 11 Tf 50 418 Td (RJ45-120 Cordon 3m     12     u    4,25 €       51,00 €) Tj ET
+BT /F1 11 Tf 50 392 Td (Onduleur 650 VA         1     u    119,00 €    119,00 €) Tj ET
+BT /F1 11 Tf 50 340 Td (Remise commerciale                             8,00 €) Tj ET
+BT /F1 11 Tf 50 314 Td (Frais de port                                 14,50 €) Tj ET
+BT /F1 11 Tf 50 288 Td (Total HT                                     464,50 €) Tj ET
+BT /F1 11 Tf 50 262 Td (TVA 20%                                       92,90 €) Tj ET
+BT /F1 11 Tf 50 236 Td (Total TTC                                    557,40 €) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000001572 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1669
+%%EOF

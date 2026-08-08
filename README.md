@@ -55,7 +55,7 @@ Création Vendor Bill (account.move Odoo)
 | **Authentification** | JWT access (30 min) + refresh tokens avec rotation et révocation (stockés hachés), hash bcrypt, changement de mot de passe, premier compte → Administrateur. Rotation des secrets JWT (`JWT_LEGACY_SECRETS`) et rate limiting anti-brute-force sur `/login` et `/refresh`. |
 | **Gestion des utilisateurs** | CRUD, rôles (Comptable / Acheteur / Administrateur), activation/désactivation, matrice de permissions centralisée. |
 | **Dépôt de factures** | Upload PDF, JPG, JPEG, PNG — validation par *magic bytes* + ouverture réelle du fichier (anti-corruption), anti-doublon garanti en base (contrainte fournisseur + numéro), limite de taille configurable, **dépôt par lot** (`/batch`). |
-| **OCR** | Pipeline **asynchrone** : rendu PDF page à page (pypdfium2) → moteur OCR (PaddleOCR par défaut, Tesseract en second moteur, sélecteur via `OCR_ENGINE`) → nettoyage → extraction (champs généraux, financiers, lignes) → score global + confiance par champ. Pages annexes détectées et conservées comme preuves (images rendues + boîtes englobantes dans `extracted_data`). Garde-fous : `OCR_MAX_PAGES`, timeout global du pipeline. |
+| **OCR** | Pipeline **asynchrone** : rendu PDF page à page (pypdfium2) → moteur OCR (PaddleOCR par défaut, Tesseract en second moteur, sélecteur via `OCR_ENGINE`) → **reconstruction des lignes de lecture** à partir des boîtes englobantes (un moteur rend des fragments positionnés, pas des lignes) → nettoyage → extraction (champs généraux, financiers, lignes) → score global + confiance par champ. Pages annexes détectées et conservées comme preuves (images rendues + boîtes englobantes dans `extracted_data`). Garde-fous : `OCR_MAX_PAGES`, timeout global du pipeline. |
 | **Tâches asynchrones** | File in-process (pool de threads), cycle `en attente → en cours → réussi/échoué`, session SQLAlchemy propre par job. `POST /process` retourne **202** + un `task_id` interrogeable via `/api/tasks/{id}`. |
 | **Intégration Odoo** | Client XML-RPC (timeout, traduction des erreurs, **clé API** d'utilisateur applicatif), synchronisation en cache local : `res.partner` → fournisseurs, `purchase.order` → BC, `purchase.order.line` → lignes BC, `account.tax` → taux de TVA. |
 | **Matching** | Rapprochement facture ↔ BC : fournisseur, lignes (produit/référence/nom flou via difflib), quantités, prix unitaires, montants HT/TTC, TVA, **conversion multi-devises** vers une devise de référence. Score global pondéré (0..1) persisté ; ré-exécution idempotente. |
@@ -125,6 +125,7 @@ smartInvoice/
 │   │   ├── paddle.py             # Moteur PaddleOCR (par défaut)
 │   │   ├── tesseract.py          # Moteur Tesseract (second moteur, psm 6)
 │   │   ├── pages.py              # Détection des pages annexes
+│   │   ├── rows.py               # Lignes de lecture reconstituées (boîtes)
 │   │   ├── confidence.py         # Confiance par champ (politique)
 │   │   ├── document.py           # Chargement PDF/image → images
 │   │   ├── cleaners.py           # Normalisation texte, montants, dates, devises
@@ -157,7 +158,9 @@ smartInvoice/
 │   └── tests/                    # Jest + Testing Library
 │
 ├── tests/                        # Tests backend (pytest) — 28 modules
-├── datasets/                     # Factures d'exemple FR/EN + generate_samples.py
+├── datasets/                     # Factures d'exemple FR/EN (image, PDF scanné,
+│                                 #   PDF numérique, scan dégradé, multi-pages)
+│                                 #   + generate_samples.py
 ├── scripts/                      # sync_odoo.py (synchronisation périodique, cron)
 ├── odoo/                         # Config serveur + addon smartinvoice_bridge (squelette)
 ├── docker/                       # Dockerfile.backend, Dockerfile.frontend, entrypoint
@@ -661,14 +664,27 @@ et le frontend double le contrôle côté UI avec `RequireAuth` / `RequireRole`.
 
 ```bash
 source .venv/bin/activate
-python -m pytest                     # 475 tests, ~95 s
+python -m pytest                     # 496 tests, ~95 s
 ruff check app tests                 # linter — propre
 python -m pytest --cov=app           # couverture globale 95 %
 ```
 
 - Base SQLite en mémoire (`StaticPool`) avec `PRAGMA foreign_keys=ON`.
 - Moteur OCR et client Odoo **bouchonnés** dans les tests
-  (`tests/ocr_fakes.py`, doubles implémentant la même interface).
+  (`tests/ocr_fakes.py`, doubles implémentant la même interface — le bouchon
+  respecte le contrat `OcrEngine`, il ne reproduit pas l'API interne de
+  PaddleOCR).
+- **Conversion de la sortie réelle de PaddleOCR** testée à partir
+  d'échantillons capturés sur le vrai moteur (`tests/paddle_samples.py`) :
+  textes, scores, boîtes, page vide, panne du moteur.
+- **Tests d'intégration avec le vrai moteur** (modèles téléchargés, quelques
+  secondes) activés à la demande — ils vérifient que la structure de la
+  bibliothèque installée correspond toujours aux échantillons figés :
+
+  ```bash
+  SMARTINVOICE_REAL_OCR=1 python -m pytest tests/test_ocr_engines.py -k Real
+  ```
+
 - Les jobs asynchrones utilisent `InlineExecutor` en test : le pipeline
   s'exécute dans le fil de l'appel, les assertions restent déterministes.
 
@@ -687,7 +703,7 @@ python -m pytest --cov=app           # couverture globale 95 %
 cd frontend
 npm run typecheck    # TypeScript — propre
 npm run lint         # ESLint
-npm test             # Jest — 22 suites, 135 tests
+npm test             # Jest — 23 suites, 141 tests
 npm run build        # build de production
 ```
 
@@ -713,19 +729,29 @@ Couverture frontend : 78 % instructions / 63 % branches (les `lib/*` et
 
 Ces limites sont détaillées, avec leur correctif envisagé, dans `AUDIT.md`.
 
-- **OCR inopérant en l'état** ⚠️ : `app/ocr/paddle.py` lit `rec_texts` à la
-  racine de `page.json`, alors que PaddleOCR 3.7 imbrique le résultat sous la
-  clé `res`. Le moteur renvoie donc **systématiquement zéro texte**, sur toute
-  plateforme, et les factures finissent en « Erreur système » sans données
-  extraites. Les tests ne l'ont pas détecté : ils simulent le moteur avec une
-  structure à plat qui ne correspond pas à la bibliothèque réelle
-  (`tests/test_ocr_engines.py`, `tests/ocr_fakes.py`).
+- **Précision de l'extraction des lignes** : un nombre présent dans la
+  désignation d'un article (`Écran LED 27"`, `Disque SSD 1 To`,
+  `Onduleur 650 VA`) est pris pour la quantité — la répartition
+  « quantité / prix unitaire / montant » repose sur le nombre de montants de la
+  ligne (`app/ocr/lines.py`). Le montant et le prix unitaire restent corrects ;
+  la quantité et la désignation demandent une correction manuelle sur ces cas.
+- **Nom et adresse du fournisseur dépendants d'un libellé** : `FieldExtractor`
+  cherche « Fournisseur : », « Supplier », « Émetteur »… Une facture dont
+  l'en-tête porte seulement la raison sociale (cas le plus courant) laisse donc
+  `supplier_name` et `supplier_address` à `null`. Le rapprochement Odoo n'en
+  dépend pas : il utilise le fournisseur déclaré au dépôt.
+- **Preuves visuelles produites mais non affichées** : le pipeline stocke
+  l'image de chaque page et les boîtes englobantes dans `extracted_data.pages`,
+  mais le frontend ne les exploite pas encore (le type `OcrExtractedData` de
+  `frontend/src/types` n'expose que `general`, `financial` et `lines`).
 - **Image backend limitée à `linux/amd64`** : `paddlepaddle==3.3.1` ne publie
   pas de roue `linux/arm64`, d'où le `--platform=linux/amd64` de
   `docker/Dockerfile.backend`. Sur un hôte ARM (Apple Silicon), le conteneur
   tourne en émulation et l'OCR échoue en plus dans oneDNN, la couche
   d'accélération x86 de PaddlePaddle. **Déployer sur x86_64** ; en développement
-  sur Mac ARM, lancer le backend en natif plutôt qu'en conteneur.
+  sur Mac ARM, lancer le backend en natif plutôt qu'en conteneur — le pipeline
+  OCR a été vérifié fonctionnel en natif sur Apple Silicon (`pip install -r
+  requirements.txt`, PaddleOCR 3.7 + PaddlePaddle 3.3.1, roues `macosx_arm64`).
 - **Auto-inscription ouverte** ⚠️ : `POST /api/auth/register` n'exige aucune
   authentification, n'est pas soumis au rate limiting (contrairement à
   `/login`) et **honore le rôle transmis par le client**. Sur une instance

@@ -92,7 +92,7 @@ _TOTAL_HT_LABELS = (
     "total hors taxes",
     "total h.t",
 )
-_TAX_LABELS = ("tva", "taxe", "tax")
+_TAX_LABELS = ("tva", "taxe", "tax", "vat")
 _TOTAL_TTC_LABELS = (
     "total ttc",
     "montant total",
@@ -127,6 +127,36 @@ FIELD_LABELS: dict[str, tuple[str, ...]] = {
     "discount": _DISCOUNT_LABELS,
     "shipping_fees": _SHIPPING_LABELS,
 }
+
+# Mots-clés d'en-tête de tableau : une ligne qui en cumule plusieurs sans
+# porter de montant annonce des colonnes (« Product Qty Price Total »), elle ne
+# porte pas de valeur. Sans cette garde, le mot « Total » de l'en-tête capture
+# le montant de la première ligne d'article.
+_COLUMN_HEADER_KEYWORDS = (
+    "désignation",
+    "designation",
+    "description",
+    "libellé",
+    "libelle",
+    "article",
+    "produit",
+    "product",
+    "item",
+    "qté",
+    "qte",
+    "quantité",
+    "quantite",
+    "qty",
+    "prix",
+    "price",
+    "montant",
+    "amount",
+    "total",
+    "unit",
+    "unité",
+    "unite",
+)
+_MIN_HEADER_KEYWORDS = 2
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z]{0,6}[-_\s/]?\d{2,}[A-Za-z0-9\-_/.]*")
 _DATE_IN_TEXT_RE = re.compile(
@@ -271,6 +301,14 @@ class FieldExtractor:
         lowered = text.lower()
         if ":" in text and not any(ch.isdigit() for ch in text):
             return True
+        # Un champ connu (« Numéro de facture : … », « Échéance : … ») suit
+        # souvent le bloc fournisseur : il ne fait pas partie de l'adresse.
+        if any(
+            label in lowered
+            for labels in FIELD_LABELS.values()
+            for label in labels
+        ):
+            return True
         return any(
             lb in lowered
             for lb in (
@@ -305,6 +343,8 @@ class FieldExtractor:
         for i, line in enumerate(lines):
             lowered = line.lower()
             amounts = find_amounts(line)
+            if not amounts and self._is_column_header(lowered):
+                continue
 
             if ht is None and any(lb in lowered for lb in _TOTAL_HT_LABELS):
                 ht = self._amount_or_next(line, lines, i, amounts)
@@ -325,6 +365,12 @@ class FieldExtractor:
             discount=discount,
             shipping_fees=shipping,
         )
+
+    @staticmethod
+    def _is_column_header(lowered: str) -> bool:
+        """Indique si une ligne annonce les colonnes d'un tableau d'articles."""
+        hits = sum(1 for kw in _COLUMN_HEADER_KEYWORDS if kw in lowered)
+        return hits >= _MIN_HEADER_KEYWORDS
 
     @staticmethod
     def _amount_or_next(line, lines, i, amounts):

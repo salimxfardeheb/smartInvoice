@@ -51,6 +51,11 @@ _AMOUNT_CANDIDATE_RE = re.compile(
 _MAX_AMOUNT = Decimal("1000000000000.00")
 
 
+def strip_currency(text: str) -> str:
+    """Retire les symboles et codes monétaires d'un texte (« 12 € » → « 12 »)."""
+    return _CURRENCY_TOKEN_RE.sub("", text)
+
+
 def normalize_amount(raw: str) -> Decimal | None:
     """Normalise un montant OCR en ``Decimal``, ou ``None`` si illisible.
 
