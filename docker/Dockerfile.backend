@@ -73,6 +73,12 @@ COPY --chown=app:app alembic.ini ./
 COPY --chown=app:app alembic ./alembic
 COPY --chown=app:app app ./app
 
+# CLI d'administration, exécutées via `docker compose exec backend` :
+#   python scripts/manage_users.py create admin admin@exemple.fr --role Administrateur
+# Les scripts résolvent la racine du projet par leur chemin ; depuis /app,
+# ``python scripts/<nom>.py`` suffit. Copiés après `app/` dont ils dépendent.
+COPY --chown=app:app scripts ./scripts
+
 EXPOSE 8000
 
 # Invoqué via `bash` : le bit exécutable du script n'est pas préservé sur les

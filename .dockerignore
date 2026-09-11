@@ -14,9 +14,12 @@
 .gitattributes
 
 # --- Python ------------------------------------------------------------------
-__pycache__/
-*.py[cod]
-*.egg-info/
+# Motifs récursifs (`**/`) : un motif nu comme `__pycache__/` ne s'applique
+# qu'à la racine du contexte, et laissait donc passer app/__pycache__ et
+# scripts/__pycache__ dans l'image.
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
 .venv/
 venv/
 env/
@@ -57,7 +60,9 @@ docker-compose.*.yml
 # --- Documentation et divers -------------------------------------------------
 docs/
 odoo/
-scripts/
+# scripts/ est volontairement inclus : l'image backend embarque les CLI
+# d'administration (création de compte, synchronisation Odoo), seuls moyens
+# d'amorcer un administrateur dans un déploiement conteneurisé.
 *.md
 !README.md
 .vscode/

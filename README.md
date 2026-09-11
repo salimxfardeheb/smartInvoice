@@ -161,7 +161,8 @@ smartInvoice/
 ├── datasets/                     # Factures d'exemple FR/EN (image, PDF scanné,
 │                                 #   PDF numérique, scan dégradé, multi-pages)
 │                                 #   + generate_samples.py
-├── scripts/                      # sync_odoo.py (synchronisation périodique, cron)
+├── scripts/                      # manage_users.py (comptes, mots de passe),
+│                                 #   sync_odoo.py (synchronisation périodique, cron)
 ├── odoo/                         # Config serveur + addon smartinvoice_bridge (squelette)
 ├── docker/                       # Dockerfile.backend, Dockerfile.frontend, entrypoint
 └── storage/                      # Stockage local des documents (racine par défaut)
@@ -444,20 +445,123 @@ l'entrypoint du backend avant le lancement d'Uvicorn.
 `ENVIRONMENT=production`, et l'API refuse de démarrer avec la clé de
 développement par défaut.
 
+#### Commandes courantes
+
+Cycle de vie de la pile :
+
+```bash
+docker compose up --build          # construit puis démarre au premier plan
+docker compose up -d               # démarre en arrière-plan
+docker compose stop                # arrête les conteneurs, volumes conservés
+docker compose down                # arrête et supprime les conteneurs
+docker compose restart backend     # redémarre un seul service
+```
+
+Observer :
+
+```bash
+docker compose ps                              # état et santé de chaque service
+docker compose logs -f backend                 # journaux en continu
+docker compose logs --tail=100 backend frontend
+curl -s http://localhost:8000/healthz | jq     # 200 = sain, 503 = dégradé
+```
+
+`GET /healthz` est à la racine (pas sous `/api`) et sans authentification : il
+sonde la base, le stockage et Odoo, et répond `503` dès qu'un composant
+*critique* est en échec. C'est la sonde utilisée par le `healthcheck` du
+service `backend`.
+
+Agir dans les conteneurs :
+
+```bash
+docker compose exec backend bash                       # shell dans l'API
+docker compose exec backend alembic current            # révision appliquée
+docker compose exec backend python scripts/manage_users.py list
+docker compose exec db psql -U smartinvoice -d smartinvoice
+
+# Sans TTY (automatisation) : -T, et le mot de passe sur l'entrée standard.
+echo 'nouveau-mot-de-passe' | docker compose exec -T backend \
+  python scripts/manage_users.py password admin --password-stdin
+```
+
+> **`exec` plutôt que `run`.** L'entrypoint du backend applique
+> `alembic upgrade head` avant de passer la main
+> (`docker/entrypoint.backend.sh`). `docker compose exec` s'exécute dans le
+> conteneur déjà démarré et court-circuite l'entrypoint ; `docker compose run`
+> le rejoue, et déclencherait donc une migration avant chaque commande.
+
+Reconstruire après une modification :
+
+```bash
+docker compose build backend           # reconstruit sans redémarrer
+docker compose up -d --build backend   # reconstruit et relance
+docker compose build --no-cache backend
+```
+
+Le code applicatif est copié dans les images, pas monté en volume : **toute
+modification de `app/` ou `scripts/` exige un rebuild** du service concerné.
+Côté frontend, `API_BASE_URL` est un argument de *build* — Next.js fige ses
+`rewrites()` dans le manifeste — donc le changer impose aussi un rebuild.
+
+> `--no-cache` sur le backend relance le préchargement des modèles PaddleOCR :
+> plusieurs centaines de Mo et un long build, surtout sur un hôte ARM où
+> l'image `linux/amd64` tourne en émulation.
+
+Réinitialiser :
+
+```bash
+docker compose down -v                        # ⚠️ supprime AUSSI les volumes
+docker volume rm smartinvoice_postgres_data   # base seule
+```
+
+> **`down -v` détruit les données.** Le drapeau emporte `postgres_data`
+> (factures, comptes, journal d'audit) et `storage_data` (documents déposés).
+> Sans lui, `down` ne supprime que les conteneurs et les données survivent.
+
 ---
 
 ## Guide d'utilisation
 
 ### 1. Créer le compte administrateur
 
-Le **premier compte créé** reçoit automatiquement le rôle **Administrateur**.
-Utilisez le formulaire d'inscription du frontend (`/login`) ou :
+Voie recommandée — la CLI d'administration
+[scripts/manage_users.py](scripts/manage_users.py), qui fixe le rôle
+explicitement et ne fait jamais passer le mot de passe en argument (il serait
+visible dans la liste des processus) :
+
+```bash
+# En local
+python scripts/manage_users.py create admin admin@example.com --role Administrateur
+
+# Sous Docker (le script est embarqué dans l'image backend)
+docker compose exec backend python scripts/manage_users.py \
+  create admin admin@example.com --role Administrateur
+```
+
+Le mot de passe est demandé de façon masquée, avec confirmation. Pour
+l'automatisation, `--password-stdin` le lit sur l'entrée standard
+(`docker compose exec -T` pour se passer de TTY).
+
+Mot de passe perdu ? La même CLI le réinitialise et révoque au passage les
+sessions ouvertes :
+
+```bash
+python scripts/manage_users.py password admin   # ou son email
+python scripts/manage_users.py list             # comptes existants
+```
+
+Alternative par l'API : le **premier compte créé** reçoit automatiquement le
+rôle **Administrateur**, via le formulaire d'inscription du frontend
+(`/login`) ou :
 
 ```bash
 curl -X POST http://localhost:8000/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","email":"admin@example.com","password":"motdepasse","full_name":"Admin"}'
 ```
+
+Cette voie suppose `POST /api/auth/register` exposé — voir la limitation
+« auto-inscription ouverte » en fin de document.
 
 Les comptes suivants doivent être créés par l'administrateur
 (`POST /api/users`), avec le rôle souhaité.

@@ -48,15 +48,44 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       TASK_QUEUE_WORKERS: ${TASK_QUEUE_WORKERS:-2}
+      # Jetons. JWT_LEGACY_SECRETS (anciennes clés séparées par des virgules)
+      # permet une rotation du secret sans déconnecter tout le monde : les
+      # jetons déjà émis restent vérifiables le temps qu'ils expirent.
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      JWT_LEGACY_SECRETS: ${JWT_LEGACY_SECRETS:-}
+      # Dépôt de documents : refus au-delà de cette taille.
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-20}
       # OCR
       OCR_ENGINE: ${OCR_ENGINE:-paddle}
       OCR_LANG: ${OCR_LANG:-fr}
+      # Langue Tesseract (codes ISO 639-2, ex. « fra+eng ») : seule l'image
+      # backend installe fra, une autre langue demande un paquet supplémentaire.
+      OCR_TESSERACT_LANG: ${OCR_TESSERACT_LANG:-fra}
+      OCR_RENDER_DPI: ${OCR_RENDER_DPI:-200}
+      OCR_CONFIDENCE_THRESHOLD: ${OCR_CONFIDENCE_THRESHOLD:-0.6}
+      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-50}
+      OCR_PIPELINE_TIMEOUT_SECONDS: ${OCR_PIPELINE_TIMEOUT_SECONDS:-300}
+      # Limitation de débit : compteur en mémoire du processus, cohérent avec
+      # l'unique worker uvicorn de l'image (voir Dockerfile.backend).
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-20}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
       # Odoo : laisser vide désactive la synchronisation.
       ODOO_URL: ${ODOO_URL:-}
       ODOO_DB: ${ODOO_DB:-}
       ODOO_USERNAME: ${ODOO_USERNAME:-}
       ODOO_PASSWORD: ${ODOO_PASSWORD:-}
       ODOO_API_KEY: ${ODOO_API_KEY:-}
+      ODOO_TIMEOUT_SECONDS: ${ODOO_TIMEOUT_SECONDS:-30}
+      # Matching : tolérances d'écart relatives (0.02 = 2 %) au-delà
+      # desquelles une anomalie est levée.
+      MATCHING_QUANTITY_TOLERANCE: ${MATCHING_QUANTITY_TOLERANCE:-0.05}
+      MATCHING_PRICE_TOLERANCE: ${MATCHING_PRICE_TOLERANCE:-0.02}
+      MATCHING_AMOUNT_TOLERANCE: ${MATCHING_AMOUNT_TOLERANCE:-0.02}
+      MATCHING_TAX_TOLERANCE: ${MATCHING_TAX_TOLERANCE:-0.02}
+      # Devise de référence des taux de change mis en cache depuis Odoo.
+      FX_BASE_CURRENCY: ${FX_BASE_CURRENCY:-EUR}
     volumes:
       # Les factures déposées survivent à la reconstruction de l'image.
       - storage_data:/app/storage
