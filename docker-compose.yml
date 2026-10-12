@@ -20,6 +20,10 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Accès depuis l'hôte (pgAdmin, psql). Lié à 127.0.0.1 : la base n'est
+      # pas joignable depuis le réseau.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       # `-d` et `-U` explicites : sans eux, pg_isready interroge la base
       # « postgres » et répondrait « prêt » avant la création de la nôtre.
