@@ -19,3 +19,4 @@ IDENTIFIANTS.md
 
 .coverage
 coverage/
+docker-compose.override.yml
